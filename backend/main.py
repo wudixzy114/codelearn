@@ -9,11 +9,11 @@ import asyncio
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import annotator, folder_learn, llm_client, repo_scanner, roadmap
+from . import annotator, folder_learn, llm_client, prompts, repo_scanner, roadmap
 from .config import FRONTEND_DIR, settings
 
 app = FastAPI(title="CodeLearn", version="0.1.0")
@@ -122,6 +122,100 @@ async def explain_status(body: StatusBody):
         return out
 
     return await _run(check)
+
+
+# ---- 右侧对话分栏：详解 / 通识问答 / 引用问答（均流式返回） -------------
+
+def _sse(gen):
+    """把文本增量生成器包装成 text/event-stream。前端用 EventSource 或 fetch 流读。"""
+    def event_stream():
+        for piece in gen:
+            # SSE 规范：data: 行，空行分隔事件。转义换行为多条 data。
+            for line in piece.split("\n"):
+                yield f"data: {line}\n"
+            yield "\n"
+        yield "event: done\ndata: [DONE]\n\n"
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+class DetailBody(BaseModel):
+    path: str
+    start_line: int
+    end_line: int
+    comment: str = ""
+
+
+@app.post("/api/detail")
+async def detail(body: DetailBody):
+    """函数/代码块「深入详解」——注释旁小按钮触发，流式返回长篇讲解。"""
+    try:
+        text, language = repo_scanner.read_file(body.path)
+    except repo_scanner.PathError as e:
+        raise HTTPException(400, str(e))
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    s = max(1, body.start_line)
+    e = min(len(lines), max(s, body.end_line))
+    snippet = "\n".join(lines[s - 1 : e])
+
+    lang = settings.language
+    messages = [
+        {"role": "system", "content": prompts.detail_system(lang)},
+        {"role": "user", "content": prompts.detail_user(
+            lang, path=body.path, language=language,
+            start=s, end=e, comment=body.comment or "（无）", code=snippet,
+        )},
+    ]
+    return _sse(llm_client.chat_stream(messages, temperature=0.3, max_tokens=2048))
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatBody(BaseModel):
+    messages: List[ChatMessage] = []       # 历史对话（不含本次注入的上下文）
+    file_path: Optional[str] = None        # 当前所在文件（可选）
+    selection: Optional[str] = None        # 选中的代码文本（引用问答时）
+    sel_start: Optional[int] = None
+    sel_end: Optional[int] = None
+
+
+@app.post("/api/chat")
+async def chat(body: ChatBody):
+    """右侧对话：三种任务合一——
+    - 无 file_path、无 selection → 纯通识问答；
+    - 有 file_path、无 selection → 带文件上下文的问答；
+    - 有 selection → 引用问答，把选中代码注入上下文。
+    """
+    lang = settings.language
+    msgs = [{"role": "system", "content": prompts.chat_system(lang)}]
+
+    # 注入上下文（作为一条 system 补充，放在历史之前）
+    ctx = None
+    if body.selection and body.file_path:
+        language = repo_scanner.lang_for(body.file_path)
+        ctx = prompts.quote_context(
+            lang, path=body.file_path, language=language,
+            start=body.sel_start or 0, end=body.sel_end or 0,
+            code=body.selection[:6000],
+        )
+    elif body.file_path:
+        language = repo_scanner.lang_for(body.file_path)
+        ctx = prompts.file_context(lang, path=body.file_path, language=language)
+    if ctx:
+        msgs.append({"role": "system", "content": ctx})
+
+    for m in body.messages[-12:]:
+        if m.role in ("user", "assistant") and m.content:
+            msgs.append({"role": m.role, "content": m.content})
+
+    if not any(m["role"] == "user" for m in msgs):
+        raise HTTPException(400, "缺少用户提问")
+
+    return _sse(llm_client.chat_stream(msgs, temperature=0.4, max_tokens=2048))
 
 
 # ---- 文件夹学习 ----------------------------------------------------------

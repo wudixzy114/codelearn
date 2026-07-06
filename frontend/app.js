@@ -44,6 +44,10 @@ const state = {
   roadmap: null,          // 当前路线图对象
   roadmapOrder: [],       // 扁平化的文件阅读顺序（用于“下一文件”预取）
   editMode: false,        // 教案编辑模式
+  // 当前打开的文件视图（用于预加载完成后的响应式刷新）
+  currentFile: null,      // { path, content, language, explained: bool }
+  // 右侧对话
+  chat: { history: [], streaming: false, context: null },
 };
 
 // ================= 初始化 =================
@@ -54,6 +58,7 @@ async function init() {
   $("#btnRoadmapRegen").addEventListener("click", () => loadRoadmap(true));
   $("#btnRoadmapEdit").addEventListener("click", toggleEdit);
   $("#btnRoadmapSave").addEventListener("click", saveRoadmap);
+  bindChatUI();
 
   try {
     state.config = await api("/api/config");
@@ -142,7 +147,7 @@ function pumpPreload() {
     preload.running++;
     updatePreloadBadge();
     postJSON("/api/explain", { path, force: false })
-      .then(() => { preload.done.add(path); markReady(path); })
+      .then((exp) => { preload.done.add(path); markReady(path); onExplained(path, exp); })
       .catch(() => {})
       .finally(() => {
         preload.inflight.delete(path);
@@ -173,6 +178,19 @@ function markReady(path) {
   });
 }
 const cssEsc = (s) => s.replace(/["\\]/g, "\\$&");
+
+// 讲解就绪回调：若正是当前打开、且仍为纯代码态的文件，则立即刷新为讲解态（修复响应式 bug）
+function onExplained(path, exp) {
+  const cur = state.currentFile;
+  if (!cur || cur.path !== path || cur.explained) return;
+  if (!exp || !exp.blocks || !exp.blocks.length) return;
+  cur.explained = true;
+  const header = $("#readerHeader");
+  const bodyEl = $("#readerBody");
+  renderExplanation(exp, cur.content, header, bodyEl);
+  const btn = header.querySelector(".btn.primary");
+  if (btn) btn.textContent = "重新生成讲解";
+}
 
 // 批量查询就绪状态，点亮徽标
 async function refreshReady(paths) {
@@ -468,13 +486,20 @@ async function openFile(path) {
   }
   metaEl.textContent = `${fileData.language} · ${fileData.total_lines} 行`;
 
+  state.currentFile = {
+    path, content: fileData.content, language: fileData.language, explained: false,
+  };
+  // 打开新文件时，清掉右栏的“引用选中代码”上下文（保留对话历史）
+  clearChatContext();
+
   if (fileData.explanation && fileData.explanation.blocks && fileData.explanation.blocks.length) {
     markReady(path);
+    state.currentFile.explained = true;
     renderExplanation(fileData.explanation, fileData.content, header, bodyEl);
     explainBtn.textContent = "重新生成讲解";
   } else {
     renderCodeOnly(fileData.content, fileData.language, bodyEl);
-    // 未就绪 → 自动后台预加载当前文件，无需手动点
+    // 未就绪 → 自动后台预加载当前文件，无需手动点（完成后 onExplained 会刷新）
     preloadEnqueue([path]);
   }
   explainBtn.addEventListener("click", () => runExplain(path, fileData.content, header, bodyEl, explainBtn));
@@ -513,6 +538,7 @@ async function runExplain(path, content, header, bodyEl, btn) {
   try {
     const exp = await postJSON("/api/explain", { path, force: true });
     markReady(path);
+    if (state.currentFile && state.currentFile.path === path) state.currentFile.explained = true;
     renderExplanation(exp, content, header, bodyEl);
     btn.textContent = "重新生成讲解";
   } catch (e) {
@@ -551,35 +577,22 @@ function renderExplanation(exp, content, header, bodyEl) {
   (exp.blocks || []).forEach((b, bi) => {
     const seg = el("div", "seg");
     const hasComment = b.comment && b.kind !== "raw";
-    const hasDetail = !!b.detail;
 
     // 行内注释（主讲解）：以该语言注释形态嵌在代码上方
     if (hasComment) {
       const cmt = el("div", "inline-comment");
-      // 缩进跟随代码首行
       const firstLine = lines[b.start_line - 1] || "";
       const indent = (firstLine.match(/^\s*/) || [""])[0];
       const label = el("span", "cmt-token");
       label.textContent = (indent ? indent : "") + (token ? token + " " : "") + "🔎 ";
       cmt.appendChild(label);
       cmt.appendChild(document.createTextNode(b.comment));
-      if (hasDetail) {
-        const chip = el("button", "detail-chip", "展开解释 ▸");
-        chip.addEventListener("click", () => toggleDetail(seg, chip, b.detail));
-        cmt.appendChild(chip);
-      }
+      // “详解”小按钮：不懂时点它，在右侧对话栏展开数百字深入讲解
+      const chip = el("button", "detail-chip", "详解 ↦");
+      chip.title = "在右侧展开对这段代码的深入讲解";
+      chip.addEventListener("click", () => explainDetail(b, exp));
+      cmt.appendChild(chip);
       seg.appendChild(cmt);
-    }
-
-    // detail 展开区（默认隐藏，点击 chip 显示）
-    if (hasDetail) {
-      const det = el("div", "detail-panel hidden");
-      det.appendChild(el("span", "detail-label", "深入解释"));
-      const dt = el("div", "detail-text");
-      dt.textContent = b.detail;
-      det.appendChild(dt);
-      seg._detailPanel = det;
-      seg.appendChild(det);
     }
 
     // 代码块
@@ -589,13 +602,6 @@ function renderExplanation(exp, content, header, bodyEl) {
   });
 
   bodyEl.appendChild(doc);
-}
-
-function toggleDetail(seg, chip, detailText) {
-  const panel = seg._detailPanel;
-  if (!panel) return;
-  const hidden = panel.classList.toggle("hidden");
-  chip.textContent = hidden ? "展开解释 ▸" : "收起解释 ▾";
 }
 
 // 构造代码块（含绝对行号 + 高亮）；collapsible 时默认折叠
@@ -743,6 +749,270 @@ function showError(text) {
   const bodyEl = $("#readerBody");
   bodyEl.innerHTML = "";
   bodyEl.appendChild(errorEl(text));
+}
+
+// ================= 右侧对话/详解分栏 =================
+function bindChatUI() {
+  $("#chatCloseBtn").addEventListener("click", closeChat);
+  $("#chatFab").addEventListener("click", openChat);
+  $("#chatClearBtn").addEventListener("click", clearChat);
+  $("#chatSendBtn").addEventListener("click", sendChat);
+  const input = $("#chatInput");
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(140, input.scrollHeight) + "px";
+  });
+  // 划选代码 → 浮现“引用提问”按钮
+  const askBtn = $("#askSelectionBtn");
+  document.addEventListener("selectionchange", onSelectionChange);
+  askBtn.addEventListener("mousedown", (e) => e.preventDefault()); // 别让按钮抢走选区
+  askBtn.addEventListener("click", quoteSelection);
+  renderChatEmpty();
+}
+
+function openChat() {
+  $("#chatPanel").classList.remove("collapsed");
+  $("#chatFab").classList.add("hidden");
+  setTimeout(() => $("#chatInput").focus(), 50);
+}
+function closeChat() {
+  $("#chatPanel").classList.add("collapsed");
+  $("#chatFab").classList.remove("hidden");
+}
+function clearChat() {
+  state.chat.history = [];
+  clearChatContext();
+  renderChatEmpty();
+}
+
+function renderChatEmpty() {
+  const box = $("#chatMessages");
+  if (state.chat.history.length) return;
+  box.innerHTML = "";
+  const e = el("div", "chat-empty");
+  e.innerHTML =
+    "<b>我可以帮你：</b><br>" +
+    "· 直接提问通识知识（无需上下文）<br>" +
+    "· 在左侧划选一段代码后「引用提问」，我会结合选中代码回答<br>" +
+    "· 点代码注释旁的「详解 ↦」，我会展开对那段代码的深入讲解";
+  box.appendChild(e);
+}
+
+// ---- 上下文芯片（引用 / 详解目标）----
+function setChatContext(ctx) {
+  // ctx: { title, code, path, start, end } 或 null
+  state.chat.context = ctx;
+  const box = $("#chatContext");
+  if (!ctx) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+  box.classList.remove("hidden");
+  box.innerHTML = "";
+  const title = el("div", "ctx-title");
+  title.appendChild(el("span", null, ctx.title || "引用上下文"));
+  const clr = el("span", "ctx-clear", "移除 ✕");
+  clr.addEventListener("click", clearChatContext);
+  title.appendChild(clr);
+  box.appendChild(title);
+  if (ctx.code) {
+    const pre = el("pre");
+    pre.textContent = ctx.code.length > 800 ? ctx.code.slice(0, 800) + "\n…" : ctx.code;
+    box.appendChild(pre);
+  }
+}
+function clearChatContext() {
+  state.chat.context = null;
+  const box = $("#chatContext");
+  box.classList.add("hidden");
+  box.innerHTML = "";
+}
+
+// ---- 划选代码 ----
+let selTimer = null;
+function onSelectionChange() {
+  clearTimeout(selTimer);
+  selTimer = setTimeout(() => {
+    const sel = window.getSelection();
+    const askBtn = $("#askSelectionBtn");
+    const text = sel ? sel.toString() : "";
+    if (!text.trim() || !sel.rangeCount) { askBtn.classList.add("hidden"); return; }
+    // 仅当选区落在阅读区内才显示
+    const reader = $("#readerBody");
+    const anchor = sel.anchorNode;
+    if (!anchor || !reader.contains(anchor.nodeType === 1 ? anchor : anchor.parentNode)) {
+      askBtn.classList.add("hidden"); return;
+    }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    const readerRect = $(".reader").getBoundingClientRect();
+    askBtn.style.left = Math.max(8, rect.left - readerRect.left) + "px";
+    askBtn.style.top = (rect.bottom - readerRect.top + 6) + "px";
+    askBtn.classList.remove("hidden");
+    askBtn._selText = text;
+  }, 60);
+}
+
+function quoteSelection() {
+  const askBtn = $("#askSelectionBtn");
+  const text = askBtn._selText || window.getSelection().toString();
+  if (!text.trim()) return;
+  const path = state.currentFile ? state.currentFile.path : null;
+  setChatContext({
+    title: "引用自 " + (path || "选中代码"),
+    code: text, path, start: 0, end: 0,
+  });
+  askBtn.classList.add("hidden");
+  openChat();
+  $("#chatInput").focus();
+}
+
+// ---- “详解”按钮 → 右栏流式深入讲解 ----
+async function explainDetail(block, exp) {
+  openChat();
+  const path = state.currentFile ? state.currentFile.path : exp.path;
+  setChatContext({
+    title: `详解 · 第 ${block.start_line}–${block.end_line} 行`,
+    code: null, path, start: block.start_line, end: block.end_line,
+  });
+  // 作为一条用户消息呈现（不写入通用 history，避免污染后续问答）
+  addMsg("user", `请详解第 ${block.start_line}–${block.end_line} 行：${block.comment || ""}`);
+  const bubble = addMsg("assistant", "", { detail: true });
+  await streamInto("/api/detail", {
+    path, start_line: block.start_line, end_line: block.end_line,
+    comment: block.comment || "",
+  }, bubble);
+}
+
+// ---- 发送对话（三种任务合一）----
+async function sendChat() {
+  if (state.chat.streaming) return;
+  const input = $("#chatInput");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  input.style.height = "auto";
+
+  addMsg("user", text);
+  state.chat.history.push({ role: "user", content: text });
+
+  const bubble = addMsg("assistant", "");
+  const ctx = state.chat.context;
+  const body = {
+    messages: state.chat.history,
+    file_path: (ctx && ctx.path) || (state.currentFile && state.currentFile.path) || null,
+  };
+  if (ctx && ctx.code) {
+    body.selection = ctx.code;
+    body.sel_start = ctx.start || 0;
+    body.sel_end = ctx.end || 0;
+  }
+  const full = await streamInto("/api/chat", body, bubble);
+  if (full) state.chat.history.push({ role: "assistant", content: full });
+}
+
+// ---- SSE 流式读取，边收边渲染 ----
+async function streamInto(url, body, bubble) {
+  state.chat.streaming = true;
+  $("#chatSendBtn").disabled = true;
+  const cursor = el("span", "cursor", " ");
+  bubble.appendChild(cursor);
+  let acc = "";
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok || !res.body) {
+      let msg = res.status + "";
+      try { const j = await res.json(); if (j.detail) msg = j.detail; } catch (_) {}
+      throw new Error(msg);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      // 解析 SSE：以空行分隔的事件块
+      const events = buf.split("\n\n");
+      buf = events.pop(); // 最后一段可能不完整，留到下轮
+      for (const ev of events) {
+        const dataLines = ev.split("\n").filter((l) => l.startsWith("data: "));
+        if (!dataLines.length) continue;
+        const payload = dataLines.map((l) => l.slice(6)).join("\n");
+        if (payload === "[DONE]") continue;
+        if (payload.startsWith("[ERROR]")) { acc += "\n\n⚠️ " + payload.slice(7).trim(); }
+        else acc += payload;
+        renderMarkdownInto(bubble, acc);
+        bubble.appendChild(cursor);
+        scrollChatBottom();
+      }
+    }
+  } catch (e) {
+    acc += (acc ? "\n\n" : "") + "⚠️ 请求失败：" + e.message;
+    renderMarkdownInto(bubble, acc);
+  } finally {
+    cursor.remove();
+    state.chat.streaming = false;
+    $("#chatSendBtn").disabled = false;
+    scrollChatBottom();
+  }
+  return acc;
+}
+
+function addMsg(role, text, opts) {
+  const box = $("#chatMessages");
+  const empty = box.querySelector(".chat-empty");
+  if (empty) empty.remove();
+  const msg = el("div", "msg " + role);
+  msg.appendChild(el("div", "who", role === "user" ? "你" : "AI 助手"));
+  const bubble = el("div", "bubble" + (opts && opts.detail ? " detail" : ""));
+  if (text) renderMarkdownInto(bubble, text);
+  msg.appendChild(bubble);
+  box.appendChild(msg);
+  scrollChatBottom();
+  return bubble;
+}
+
+function scrollChatBottom() {
+  const box = $("#chatMessages");
+  box.scrollTop = box.scrollHeight;
+}
+
+// ---- 极简 Markdown 渲染（代码块/行内码/粗体/标题/列表），安全转义 ----
+function renderMarkdownInto(node, md) {
+  node.innerHTML = mdToHtml(md);
+  // 高亮代码块
+  node.querySelectorAll("pre code").forEach((c) => {
+    try { hljs.highlightElement(c); } catch (_) {}
+  });
+}
+
+function mdToHtml(md) {
+  // 先抽取围栏代码块，避免其中内容被其他规则破坏
+  const blocks = [];
+  md = md.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const i = blocks.length;
+    blocks.push(`<pre><code class="language-${esc(lang || "")}">${esc(code.replace(/\n$/, ""))}</code></pre>`);
+    return ` BLOCK${i} `;
+  });
+  let html = esc(md);
+  // 行内代码
+  html = html.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`);
+  // 粗体
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  // 标题
+  html = html.replace(/^######\s*(.+)$/gm, "<b>$1</b>")
+             .replace(/^#{1,5}\s*(.+)$/gm, "<b>$1</b>");
+  // 无序列表项
+  html = html.replace(/^\s*[-*]\s+(.+)$/gm, "• $1");
+  // 换行
+  html = html.replace(/\n/g, "<br>");
+  // 还原代码块（先把可能被 <br> 化的占位符复原）
+  html = html.replace(/ BLOCK(\d+) /g, (_, i) => blocks[+i]);
+  return html;
 }
 
 init();

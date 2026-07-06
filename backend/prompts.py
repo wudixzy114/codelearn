@@ -215,6 +215,82 @@ suggested_order must use real paths from the list below, ordered foundational-to
 }
 
 
+# ======================================================================
+# 右侧对话分栏：函数详解 / 通识问答 / 引用问答
+# ======================================================================
+
+# 三种任务共用的“基础人设”，按是否带上下文微调
+_CHAT_SYSTEM = {
+    "zh": (
+        "你是一位资深软件工程师，作为代码库学习助手，在学习者阅读代码时随时答疑。"
+        "回答要准确、聚焦、有条理；涉及代码时可用简短代码块举例。"
+        "使用 Markdown 排版。若问题超出所给上下文，就凭通用工程知识回答，并说明这一点。"
+    ),
+    "en": (
+        "You are a senior software engineer acting as a codebase learning assistant, "
+        "answering questions while the learner reads code. Be accurate, focused, and "
+        "well-structured; use short code snippets when helpful. Use Markdown. If a question "
+        "goes beyond the given context, answer from general engineering knowledge and say so."
+    ),
+}
+
+# 函数/代码块「详解」——由注释旁的小按钮触发，要求写数百字的深入讲解
+_DETAIL_SYSTEM = {
+    "zh": (
+        "你是一位资深软件工程师，正在为学习者深入讲解一段代码。请写一篇结构化的详解，"
+        "覆盖：这段代码的职责与整体思路、关键步骤逐一说明、重要参数/返回值/副作用、"
+        "与项目其他部分的关系、易错点或设计权衡。篇幅可长（数百字），用 Markdown 分点组织，"
+        "但不要逐字复述代码。"
+    ),
+    "en": (
+        "You are a senior engineer giving an in-depth explanation of a code block. Write a "
+        "structured deep-dive covering: responsibility and overall approach, step-by-step of "
+        "key logic, important params/returns/side-effects, relations to the rest of the "
+        "project, and pitfalls or design trade-offs. It can be long (hundreds of words), "
+        "organized in Markdown, but don't restate the code verbatim."
+    ),
+}
+
+_DETAIL_USER = {
+    "zh": """请深入讲解下面这段来自文件 `{path}`（{language}）的代码（第 {start}–{end} 行）。
+
+已有的一句话注释是：{comment}
+
+请在此基础上展开为详尽讲解：
+```{language}
+{code}
+```""",
+    "en": """Give an in-depth explanation of the following code from `{path}` ({language}), lines {start}–{end}.
+
+The existing one-line comment is: {comment}
+
+Expand it into a thorough explanation:
+```{language}
+{code}
+```""",
+}
+
+# 引用问答：把用户选中的代码 + 所在文件注入上下文
+_QUOTE_CONTEXT = {
+    "zh": """[上下文] 学习者正在阅读文件 `{path}`（{language}），并选中了如下代码片段（第 {start}–{end} 行）作为提问对象：
+```{language}
+{code}
+```
+请结合这段被选中的代码回答后续问题。""",
+    "en": """[Context] The learner is reading `{path}` ({language}) and selected this snippet (lines {start}–{end}) as the subject of the question:
+```{language}
+{code}
+```
+Answer the following questions with this selected code in mind.""",
+}
+
+# 仅文件级上下文（未选中具体片段，但在某文件里提问）
+_FILE_CONTEXT = {
+    "zh": "[上下文] 学习者正在阅读文件 `{path}`（{language}）。如相关可结合该文件作答。",
+    "en": "[Context] The learner is reading `{path}` ({language}). Use it if relevant.",
+}
+
+
 # ---- 取值助手 ------------------------------------------------------------
 
 def _pick(mapping: Dict[str, str], lang: str) -> str:
@@ -227,6 +303,26 @@ def annotate_system(lang: str) -> str:
 
 def annotate_user(lang: str, **kw) -> str:
     return _pick(_ANNOTATE_USER, lang).format(**kw)
+
+
+def chat_system(lang: str) -> str:
+    return _pick(_CHAT_SYSTEM, lang)
+
+
+def detail_system(lang: str) -> str:
+    return _pick(_DETAIL_SYSTEM, lang)
+
+
+def detail_user(lang: str, **kw) -> str:
+    return _pick(_DETAIL_USER, lang).format(**kw)
+
+
+def quote_context(lang: str, **kw) -> str:
+    return _pick(_QUOTE_CONTEXT, lang).format(**kw)
+
+
+def file_context(lang: str, **kw) -> str:
+    return _pick(_FILE_CONTEXT, lang).format(**kw)
 
 
 def overview_system(lang: str) -> str:

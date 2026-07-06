@@ -140,6 +140,35 @@ def chat_json(
     raise last_err if last_err else LLMError("LLM 调用失败（未知原因）")
 
 
+def chat_stream(messages, *, temperature: float = 0.3, max_tokens: int = 2048):
+    """流式对话：逐段 yield 文本增量。messages 为 OpenAI 格式的消息列表。
+
+    失败时 yield 一段以 [ERROR] 开头的说明文字，由上层决定如何展示。
+    """
+    try:
+        client = _get_client()
+    except LLMError as e:
+        yield f"[ERROR] {e}"
+        return
+    try:
+        stream = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            piece = getattr(delta, "content", None)
+            if piece:
+                yield piece
+    except Exception as e:
+        yield f"[ERROR] LLM 流式调用失败：{e}"
+
+
 def ping() -> dict:
     """健康检查：发一条极短请求，确认网关可达、密钥有效。"""
     try:

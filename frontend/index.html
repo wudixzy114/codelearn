@@ -54,12 +54,37 @@
           <p class="welcome">
             欢迎使用 <b>CodeLearn</b>。<br />
             左侧选择「学习路线」按 AI 编排的顺序学习，或用「文件树」自由浏览。<br />
-            打开文件后可一键生成逐块讲解，打开文件夹可查看模块导读。
+            打开文件后可一键生成逐块讲解，打开文件夹可查看模块导读。<br />
+            阅读时可点注释旁的「详解」深入了解某段代码，或在右侧对话栏向 AI 提问。
           </p>
         </div>
         <div class="reader-body" id="readerBody"></div>
+        <!-- 划选代码后浮现的引用提问按钮 -->
+        <button id="askSelectionBtn" class="ask-selection hidden">引用提问 ↦</button>
       </section>
+
+      <!-- 右侧对话/详解分栏（可开关滑出） -->
+      <aside class="chat-panel collapsed" id="chatPanel">
+        <div class="chat-head">
+          <span class="chat-title" id="chatTitle">AI 助手</span>
+          <div class="chat-head-actions">
+            <button id="chatClearBtn" class="mini-btn" title="清空对话">清空</button>
+            <button id="chatCloseBtn" class="icon-btn" title="收起">✕</button>
+          </div>
+        </div>
+        <!-- 引用上下文芯片（有选中/详解时显示） -->
+        <div id="chatContext" class="chat-context hidden"></div>
+        <div id="chatMessages" class="chat-messages"></div>
+        <div class="chat-input-row">
+          <textarea id="chatInput" class="chat-input" rows="1"
+            placeholder="问点什么…（普通问题直接问；想针对某段代码，先在左侧划选）"></textarea>
+          <button id="chatSendBtn" class="btn primary" title="发送">发送</button>
+        </div>
+      </aside>
     </div>
+
+    <!-- 收起态下用于重新打开对话栏的悬浮按钮 -->
+    <button id="chatFab" class="chat-fab" title="打开 AI 助手">💬 AI</button>
   </div>
 
   <script src="/static/vendor/highlight.min.js"></script>
