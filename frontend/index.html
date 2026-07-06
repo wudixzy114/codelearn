@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CodeLearn · 代码库学习</title>
+  <link rel="stylesheet" href="/static/vendor/github-dark.min.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- 顶栏 -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">◧</span> CodeLearn
+        <span class="repo-name" id="repoName">—</span>
+      </div>
+      <div class="top-actions">
+        <span class="preload-badge hidden" id="preloadBadge">预加载中</span>
+        <span class="health" id="healthDot" title="检查中…">●</span>
+        <select id="langSelect" title="讲解语言">
+          <option value="zh">中文讲解</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+    </header>
+
+    <div class="main">
+      <!-- 侧边栏 -->
+      <aside class="sidebar">
+        <div class="tabs">
+          <button class="tab active" data-tab="roadmap">学习路线</button>
+          <button class="tab" data-tab="tree">文件树</button>
+        </div>
+        <div class="tab-panel" id="panel-roadmap">
+          <div class="panel-actions">
+            <button id="btnRoadmap" class="btn">生成/加载路线图</button>
+            <button id="btnRoadmapEdit" class="btn ghost hidden" title="微调教案">编辑</button>
+            <button id="btnRoadmapSave" class="btn primary hidden" title="保存微调（不重新生成）">保存微调</button>
+            <button id="btnRoadmapRegen" class="btn ghost" title="重新生成">↻</button>
+          </div>
+          <div id="roadmapBody" class="roadmap-body">
+            <p class="hint">点击上方按钮，让 AI 分析整个项目并生成学习路线。</p>
+          </div>
+        </div>
+        <div class="tab-panel hidden" id="panel-tree">
+          <div id="treeBody" class="tree-body"><p class="hint">加载中…</p></div>
+        </div>
+      </aside>
+
+      <!-- 阅读区 -->
+      <section class="reader">
+        <div class="reader-header" id="readerHeader">
+          <p class="welcome">
+            欢迎使用 <b>CodeLearn</b>。<br />
+            左侧选择「学习路线」按 AI 编排的顺序学习，或用「文件树」自由浏览。<br />
+            打开文件后可一键生成逐块讲解，打开文件夹可查看模块导读。
+          </p>
+        </div>
+        <div class="reader-body" id="readerBody"></div>
+      </section>
+    </div>
+  </div>
+
+  <script src="/static/vendor/highlight.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
