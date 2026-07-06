@@ -1042,15 +1042,18 @@ async function streamInto(url, body, bubble, sess) {
         else acc += payload;
         renderMarkdownInto(bubble, acc);
         bubble.appendChild(cursor);
+        scrollBubbleBottom(bubble);
         scrollSessionBottom(sess);
       }
     }
   } catch (e) {
     acc += (acc ? "\n\n" : "") + "⚠️ 请求失败：" + e.message;
     renderMarkdownInto(bubble, acc);
+    scrollBubbleBottom(bubble);
   } finally {
     cursor.remove();
     $("#chatSendBtn").disabled = false;
+    scrollBubbleBottom(bubble);
     scrollSessionBottom(sess);
   }
   return acc;
@@ -1072,6 +1075,10 @@ function scrollSessionBottom(sess) {
   if (sess && sess.node) sess.node.scrollIntoView({ block: "nearest" });
   const box = $("#chatSessions");
   box.scrollTop = box.scrollHeight;
+}
+
+function scrollBubbleBottom(bubble) {
+  if (bubble) bubble.scrollTop = bubble.scrollHeight;
 }
 
 // ---- 极简 Markdown 渲染（代码块/行内码/粗体/标题/列表），安全转义 ----

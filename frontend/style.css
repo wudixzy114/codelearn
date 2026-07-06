@@ -316,24 +316,26 @@ select option { background: var(--bg-alt); color: var(--text); }
 .chat-card {
   border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
   background: var(--bg); transition: border-color .15s;
+  min-width: 0;
 }
 .chat-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-dim); }
 .card-head {
   display: flex; align-items: center; gap: 8px; cursor: pointer;
   padding: 8px 10px; background: var(--bg-elev); border-bottom: 1px solid var(--border);
+  min-width: 0;
 }
 .chat-card.collapsed .card-head { border-bottom: none; }
 .card-badge {
   flex: 0 0 auto; font-size: 10px; padding: 1px 7px; border-radius: 8px;
-  color: #fff; letter-spacing: .03em;
+  color: #fff; letter-spacing: .03em; white-space: nowrap;
 }
 .card-badge.free { background: #6e7681; }
 .card-badge.quote { background: #1f6feb; }
 .card-badge.detail { background: #8957e5; }
-.card-title { flex: 1; font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-acts { flex: 0 0 auto; display: flex; gap: 2px; }
-.card-acts .icon-btn { font-size: 12px; padding: 1px 6px; }
-.card-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+.card-title { flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-acts { flex: 0 0 auto; display: flex; gap: 2px; min-width: max-content; }
+.card-acts .icon-btn { flex: 0 0 auto; font-size: 12px; padding: 1px 6px; }
+.card-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .chat-card.collapsed .card-body { display: none; }
 .card-context {
   background: var(--note-bg); border: 1px solid var(--border);
@@ -341,21 +343,22 @@ select option { background: var(--bg-alt); color: var(--text); }
 }
 .card-context .ctx-label { color: var(--accent); font-size: 11px; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-context pre { margin: 0; max-height: 88px; overflow: auto; font-family: var(--mono); font-size: 11.5px; color: var(--text); white-space: pre; }
-.card-messages { display: flex; flex-direction: column; gap: 10px; }
+.card-messages { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 
 /* 消息气泡 */
-.msg { display: flex; flex-direction: column; gap: 3px; }
+.msg { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .msg .who { font-size: 11px; color: var(--text-dim); }
 .msg .bubble {
   padding: 9px 12px; border-radius: 10px; font-size: 13.5px; line-height: 1.7;
-  white-space: pre-wrap; word-break: break-word; overflow-x: auto;
+  max-width: 100%; min-width: 0; max-height: min(48vh, 420px);
+  white-space: pre-wrap; overflow: auto; overflow-wrap: anywhere; word-break: break-word;
 }
 .msg.user { align-items: flex-end; }
 .msg.user .bubble { background: var(--accent-dim); color: #fff; border-bottom-right-radius: 3px; max-width: 92%; }
 .msg.assistant .bubble { background: var(--bg-elev); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
 .msg.assistant .bubble.detail { border-left: 3px solid #8957e5; }
 .msg .bubble code { font-family: var(--mono); font-size: 12px; background: rgba(110,118,129,.2); padding: 1px 4px; border-radius: 4px; }
-.msg .bubble pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; overflow-x: auto; }
+.msg .bubble pre { max-width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; overflow: auto; }
 .msg .bubble pre code { background: none; padding: 0; }
 .msg .bubble .cursor { display: inline-block; width: 7px; background: var(--accent); animation: blink 1s step-end infinite; }
 @keyframes blink { 50% { opacity: 0; } }
