@@ -234,20 +234,22 @@ _CHAT_SYSTEM = {
     ),
 }
 
-# 函数/代码块「详解」——由注释旁的小按钮触发，要求写数百字的深入讲解
+# 函数/代码块「详解」——由注释旁的小按钮触发。按代码复杂度灵活详略。
 _DETAIL_SYSTEM = {
     "zh": (
-        "你是一位资深软件工程师，正在为学习者深入讲解一段代码。请写一篇结构化的详解，"
-        "覆盖：这段代码的职责与整体思路、关键步骤逐一说明、重要参数/返回值/副作用、"
-        "与项目其他部分的关系、易错点或设计权衡。篇幅可长（数百字），用 Markdown 分点组织，"
-        "但不要逐字复述代码。"
+        "你是一位资深软件工程师，学习者对某段代码看注释仍不够清楚，点开了「详解」。"
+        "请把这段代码讲清楚——讲到学习者能真正理解为止，篇幅由代码本身的复杂度决定："
+        "简单的代码几句话说透即可，别硬凑；复杂的再充分展开关键逻辑、参数/副作用、"
+        "与项目其他部分的关系、易错点等。自然organized、可用 Markdown，重点是讲透而非面面俱到，"
+        "不要逐字复述代码。"
     ),
     "en": (
-        "You are a senior engineer giving an in-depth explanation of a code block. Write a "
-        "structured deep-dive covering: responsibility and overall approach, step-by-step of "
-        "key logic, important params/returns/side-effects, relations to the rest of the "
-        "project, and pitfalls or design trade-offs. It can be long (hundreds of words), "
-        "organized in Markdown, but don't restate the code verbatim."
+        "You are a senior engineer. The learner opened a 'deep-dive' because the one-line "
+        "comment wasn't enough. Explain this code until they truly get it — length should "
+        "follow the code's own complexity: for simple code a few sentences suffice (don't pad "
+        "it), for complex code expand on key logic, params/side-effects, relations to the rest "
+        "of the project, pitfalls. Use Markdown naturally. Aim to make it click, not to be "
+        "exhaustive. Don't restate the code verbatim."
     ),
 }
 
@@ -256,15 +258,15 @@ _DETAIL_USER = {
 
 已有的一句话注释是：{comment}
 
-请在此基础上展开为详尽讲解：
+请在此基础上把它讲清楚：
 ```{language}
 {code}
 ```""",
-    "en": """Give an in-depth explanation of the following code from `{path}` ({language}), lines {start}–{end}.
+    "en": """Explain the following code from `{path}` ({language}), lines {start}–{end}.
 
 The existing one-line comment is: {comment}
 
-Expand it into a thorough explanation:
+Build on it and make it clear:
 ```{language}
 {code}
 ```""",

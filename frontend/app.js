@@ -46,8 +46,8 @@ const state = {
   editMode: false,        // 教案编辑模式
   // 当前打开的文件视图（用于预加载完成后的响应式刷新）
   currentFile: null,      // { path, content, language, explained: bool }
-  // 右侧对话
-  chat: { history: [], streaming: false, context: null },
+  // 右侧对话：多会话隔离
+  chat: { sessions: [], activeId: null },
 };
 
 // ================= 初始化 =================
@@ -489,8 +489,6 @@ async function openFile(path) {
   state.currentFile = {
     path, content: fileData.content, language: fileData.language, explained: false,
   };
-  // 打开新文件时，清掉右栏的“引用选中代码”上下文（保留对话历史）
-  clearChatContext();
 
   if (fileData.explanation && fileData.explanation.blocks && fileData.explanation.blocks.length) {
     markReady(path);
@@ -751,11 +749,21 @@ function showError(text) {
   bodyEl.appendChild(errorEl(text));
 }
 
-// ================= 右侧对话/详解分栏 =================
+// ================= 右侧对话/详解分栏（会话隔离） =================
+// 每个「详解 / 引用提问 / 自由提问」都是一张独立会话卡片：可折叠、可删除、
+// 各有自己的上下文与历史；底部输入框发往“当前活动会话”。
+let _sessionSeq = 0;
+
 function bindChatUI() {
   $("#chatCloseBtn").addEventListener("click", closeChat);
   $("#chatFab").addEventListener("click", openChat);
-  $("#chatClearBtn").addEventListener("click", clearChat);
+  $("#chatNewBtn").addEventListener("click", () => {
+    const s = createSession({ kind: "free", title: "自由提问" });
+    setActiveSession(s.id);
+    openChat();
+    $("#chatInput").focus();
+  });
+  $("#chatClearBtn").addEventListener("click", clearAllSessions);
   $("#chatSendBtn").addEventListener("click", sendChat);
   const input = $("#chatInput");
   input.addEventListener("keydown", (e) => {
@@ -765,12 +773,11 @@ function bindChatUI() {
     input.style.height = "auto";
     input.style.height = Math.min(140, input.scrollHeight) + "px";
   });
-  // 划选代码 → 浮现“引用提问”按钮
   const askBtn = $("#askSelectionBtn");
   document.addEventListener("selectionchange", onSelectionChange);
-  askBtn.addEventListener("mousedown", (e) => e.preventDefault()); // 别让按钮抢走选区
+  askBtn.addEventListener("mousedown", (e) => e.preventDefault());
   askBtn.addEventListener("click", quoteSelection);
-  renderChatEmpty();
+  renderSessionsEmpty();
 }
 
 function openChat() {
@@ -782,53 +789,133 @@ function closeChat() {
   $("#chatPanel").classList.add("collapsed");
   $("#chatFab").classList.remove("hidden");
 }
-function clearChat() {
-  state.chat.history = [];
-  clearChatContext();
-  renderChatEmpty();
+
+// ---- 会话模型 ----
+function createSession({ kind, title, context }) {
+  const id = "s" + (++_sessionSeq);
+  const sess = {
+    id, kind,                       // free | quote | detail
+    title: title || "会话",
+    context: context || null,       // { path, code, start, end }
+    history: [],                    // [{role, content}]
+    streaming: false,
+    collapsed: false,
+    node: null, bodyEl: null,
+  };
+  state.chat.sessions.push(sess);
+  removeSessionsEmpty();
+  renderSessionCard(sess);
+  return sess;
 }
 
-function renderChatEmpty() {
-  const box = $("#chatMessages");
-  if (state.chat.history.length) return;
+function getSession(id) { return state.chat.sessions.find((s) => s.id === id); }
+function activeSession() { return getSession(state.chat.activeId); }
+
+function setActiveSession(id) {
+  state.chat.activeId = id;
+  document.querySelectorAll(".chat-card").forEach((c) =>
+    c.classList.toggle("active", c.dataset.sid === id));
+  const s = getSession(id);
+  const hint = $("#chatActiveHint");
+  if (s) {
+    hint.classList.remove("hidden");
+    hint.textContent = "发送至：" + s.title;
+  } else {
+    hint.classList.add("hidden");
+  }
+}
+
+function deleteSession(id) {
+  const i = state.chat.sessions.findIndex((s) => s.id === id);
+  if (i === -1) return;
+  const s = state.chat.sessions[i];
+  if (s.node) s.node.remove();
+  state.chat.sessions.splice(i, 1);
+  if (state.chat.activeId === id) {
+    const next = state.chat.sessions[state.chat.sessions.length - 1];
+    setActiveSession(next ? next.id : null);
+  }
+  if (!state.chat.sessions.length) renderSessionsEmpty();
+}
+
+function clearAllSessions() {
+  state.chat.sessions.slice().forEach((s) => { if (s.node) s.node.remove(); });
+  state.chat.sessions = [];
+  state.chat.activeId = null;
+  renderSessionsEmpty();
+}
+
+function renderSessionsEmpty() {
+  const box = $("#chatSessions");
   box.innerHTML = "";
   const e = el("div", "chat-empty");
   e.innerHTML =
-    "<b>我可以帮你：</b><br>" +
-    "· 直接提问通识知识（无需上下文）<br>" +
-    "· 在左侧划选一段代码后「引用提问」，我会结合选中代码回答<br>" +
-    "· 点代码注释旁的「详解 ↦」，我会展开对那段代码的深入讲解";
+    "<b>三种独立会话，互不干扰：</b><br>" +
+    "· 点代码注释旁「详解 ↦」→ 针对那段代码开一张<b>详解卡</b><br>" +
+    "· 左侧划选代码后「引用提问」→ 一张带引用的<b>引用卡</b><br>" +
+    "· 点右上「＋ 新会话」→ 一张<b>自由提问卡</b>（通识问答）<br><br>" +
+    "每张卡可折叠、可删除，点卡片头即切换为“当前发送目标”。";
   box.appendChild(e);
+  $("#chatActiveHint").classList.add("hidden");
+}
+function removeSessionsEmpty() {
+  const empty = $("#chatSessions").querySelector(".chat-empty");
+  if (empty) empty.remove();
 }
 
-// ---- 上下文芯片（引用 / 详解目标）----
-function setChatContext(ctx) {
-  // ctx: { title, code, path, start, end } 或 null
-  state.chat.context = ctx;
-  const box = $("#chatContext");
-  if (!ctx) { box.classList.add("hidden"); box.innerHTML = ""; return; }
-  box.classList.remove("hidden");
-  box.innerHTML = "";
-  const title = el("div", "ctx-title");
-  title.appendChild(el("span", null, ctx.title || "引用上下文"));
-  const clr = el("span", "ctx-clear", "移除 ✕");
-  clr.addEventListener("click", clearChatContext);
-  title.appendChild(clr);
-  box.appendChild(title);
-  if (ctx.code) {
+// ---- 渲染一张会话卡片 ----
+const KIND_BADGE = { free: "自由", quote: "引用", detail: "详解" };
+
+function renderSessionCard(sess) {
+  const box = $("#chatSessions");
+  const card = el("div", "chat-card");
+  card.dataset.sid = sess.id;
+
+  // 卡头：徽章 + 标题 + 折叠/删除
+  const head = el("div", "card-head");
+  head.appendChild(el("span", "card-badge " + sess.kind, KIND_BADGE[sess.kind] || "会话"));
+  head.appendChild(el("span", "card-title", sess.title));
+  const acts = el("div", "card-acts");
+  const collapseBtn = el("button", "icon-btn", sess.collapsed ? "▸" : "▾");
+  collapseBtn.title = "折叠/展开";
+  collapseBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    sess.collapsed = !sess.collapsed;
+    card.classList.toggle("collapsed", sess.collapsed);
+    collapseBtn.textContent = sess.collapsed ? "▸" : "▾";
+  });
+  const delBtn = el("button", "icon-btn danger", "✕");
+  delBtn.title = "删除此会话";
+  delBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(sess.id); });
+  acts.appendChild(collapseBtn);
+  acts.appendChild(delBtn);
+  head.appendChild(acts);
+  head.addEventListener("click", () => setActiveSession(sess.id));
+  card.appendChild(head);
+
+  // 引用上下文（若有）
+  const body = el("div", "card-body");
+  if (sess.context && sess.context.code) {
+    const ctx = el("div", "card-context");
+    ctx.appendChild(el("div", "ctx-label", "引用代码" + (sess.context.path ? "· " + sess.context.path : "")));
     const pre = el("pre");
-    pre.textContent = ctx.code.length > 800 ? ctx.code.slice(0, 800) + "\n…" : ctx.code;
-    box.appendChild(pre);
+    pre.textContent = sess.context.code.length > 600
+      ? sess.context.code.slice(0, 600) + "\n…" : sess.context.code;
+    ctx.appendChild(pre);
+    body.appendChild(ctx);
   }
-}
-function clearChatContext() {
-  state.chat.context = null;
-  const box = $("#chatContext");
-  box.classList.add("hidden");
-  box.innerHTML = "";
+  const msgs = el("div", "card-messages");
+  body.appendChild(msgs);
+  card.appendChild(body);
+
+  box.appendChild(card);
+  sess.node = card;
+  sess.bodyEl = msgs;
+  card.scrollIntoView({ block: "nearest" });
+  return card;
 }
 
-// ---- 划选代码 ----
+// ---- 上下文：划选代码 ----
 let selTimer = null;
 function onSelectionChange() {
   clearTimeout(selTimer);
@@ -837,7 +924,6 @@ function onSelectionChange() {
     const askBtn = $("#askSelectionBtn");
     const text = sel ? sel.toString() : "";
     if (!text.trim() || !sel.rangeCount) { askBtn.classList.add("hidden"); return; }
-    // 仅当选区落在阅读区内才显示
     const reader = $("#readerBody");
     const anchor = sel.anchorNode;
     if (!anchor || !reader.contains(anchor.nodeType === 1 ? anchor : anchor.parentNode)) {
@@ -857,48 +943,57 @@ function quoteSelection() {
   const text = askBtn._selText || window.getSelection().toString();
   if (!text.trim()) return;
   const path = state.currentFile ? state.currentFile.path : null;
-  setChatContext({
-    title: "引用自 " + (path || "选中代码"),
-    code: text, path, start: 0, end: 0,
+  const snippet = text.trim();
+  const s = createSession({
+    kind: "quote",
+    title: "引用 · " + (path ? path.split("/").pop() : "选中代码"),
+    context: { path, code: snippet, start: 0, end: 0 },
   });
+  setActiveSession(s.id);
   askBtn.classList.add("hidden");
+  window.getSelection().removeAllRanges();
   openChat();
   $("#chatInput").focus();
 }
 
-// ---- “详解”按钮 → 右栏流式深入讲解 ----
+// ---- “详解”按钮 → 新开一张详解会话卡并流式生成 ----
 async function explainDetail(block, exp) {
   openChat();
   const path = state.currentFile ? state.currentFile.path : exp.path;
-  setChatContext({
+  const s = createSession({
+    kind: "detail",
     title: `详解 · 第 ${block.start_line}–${block.end_line} 行`,
-    code: null, path, start: block.start_line, end: block.end_line,
+    context: { path, code: null, start: block.start_line, end: block.end_line },
   });
-  // 作为一条用户消息呈现（不写入通用 history，避免污染后续问答）
-  addMsg("user", `请详解第 ${block.start_line}–${block.end_line} 行：${block.comment || ""}`);
-  const bubble = addMsg("assistant", "", { detail: true });
-  await streamInto("/api/detail", {
+  setActiveSession(s.id);
+  const bubble = addMsgTo(s, "assistant", "", { detail: true });
+  s.streaming = true;
+  const full = await streamInto("/api/detail", {
     path, start_line: block.start_line, end_line: block.end_line,
     comment: block.comment || "",
-  }, bubble);
+  }, bubble, s);
+  s.streaming = false;
+  if (full) s.history.push({ role: "assistant", content: full });
 }
 
-// ---- 发送对话（三种任务合一）----
+// ---- 发送对话到当前活动会话 ----
 async function sendChat() {
-  if (state.chat.streaming) return;
+  let s = activeSession();
+  if (!s) { s = createSession({ kind: "free", title: "自由提问" }); setActiveSession(s.id); }
+  if (s.streaming) return;
   const input = $("#chatInput");
   const text = input.value.trim();
   if (!text) return;
   input.value = "";
   input.style.height = "auto";
 
-  addMsg("user", text);
-  state.chat.history.push({ role: "user", content: text });
+  addMsgTo(s, "user", text);
+  s.history.push({ role: "user", content: text });
+  const bubble = addMsgTo(s, "assistant", "");
 
-  const bubble = addMsg("assistant", "");
-  const ctx = state.chat.context;
+  const ctx = s.context;
   const body = {
-    messages: state.chat.history,
+    messages: s.history,
     file_path: (ctx && ctx.path) || (state.currentFile && state.currentFile.path) || null,
   };
   if (ctx && ctx.code) {
@@ -906,13 +1001,14 @@ async function sendChat() {
     body.sel_start = ctx.start || 0;
     body.sel_end = ctx.end || 0;
   }
-  const full = await streamInto("/api/chat", body, bubble);
-  if (full) state.chat.history.push({ role: "assistant", content: full });
+  s.streaming = true;
+  const full = await streamInto("/api/chat", body, bubble, s);
+  s.streaming = false;
+  if (full) s.history.push({ role: "assistant", content: full });
 }
 
-// ---- SSE 流式读取，边收边渲染 ----
-async function streamInto(url, body, bubble) {
-  state.chat.streaming = true;
+// ---- SSE 流式读取，边收边渲染（scoped 到某会话卡片）----
+async function streamInto(url, body, bubble, sess) {
   $("#chatSendBtn").disabled = true;
   const cursor = el("span", "cursor", " ");
   bubble.appendChild(cursor);
@@ -935,9 +1031,8 @@ async function streamInto(url, body, bubble) {
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
-      // 解析 SSE：以空行分隔的事件块
       const events = buf.split("\n\n");
-      buf = events.pop(); // 最后一段可能不完整，留到下轮
+      buf = events.pop();
       for (const ev of events) {
         const dataLines = ev.split("\n").filter((l) => l.startsWith("data: "));
         if (!dataLines.length) continue;
@@ -947,7 +1042,7 @@ async function streamInto(url, body, bubble) {
         else acc += payload;
         renderMarkdownInto(bubble, acc);
         bubble.appendChild(cursor);
-        scrollChatBottom();
+        scrollSessionBottom(sess);
       }
     }
   } catch (e) {
@@ -955,29 +1050,27 @@ async function streamInto(url, body, bubble) {
     renderMarkdownInto(bubble, acc);
   } finally {
     cursor.remove();
-    state.chat.streaming = false;
     $("#chatSendBtn").disabled = false;
-    scrollChatBottom();
+    scrollSessionBottom(sess);
   }
   return acc;
 }
 
-function addMsg(role, text, opts) {
-  const box = $("#chatMessages");
-  const empty = box.querySelector(".chat-empty");
-  if (empty) empty.remove();
+function addMsgTo(sess, role, text, opts) {
+  const box = sess.bodyEl;
   const msg = el("div", "msg " + role);
   msg.appendChild(el("div", "who", role === "user" ? "你" : "AI 助手"));
   const bubble = el("div", "bubble" + (opts && opts.detail ? " detail" : ""));
   if (text) renderMarkdownInto(bubble, text);
   msg.appendChild(bubble);
   box.appendChild(msg);
-  scrollChatBottom();
+  scrollSessionBottom(sess);
   return bubble;
 }
 
-function scrollChatBottom() {
-  const box = $("#chatMessages");
+function scrollSessionBottom(sess) {
+  if (sess && sess.node) sess.node.scrollIntoView({ block: "nearest" });
+  const box = $("#chatSessions");
   box.scrollTop = box.scrollHeight;
 }
 

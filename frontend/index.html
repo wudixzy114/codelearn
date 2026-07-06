@@ -66,19 +66,23 @@
       <!-- 右侧对话/详解分栏（可开关滑出） -->
       <aside class="chat-panel collapsed" id="chatPanel">
         <div class="chat-head">
-          <span class="chat-title" id="chatTitle">AI 助手</span>
+          <span class="chat-title" id="chatTitle">AI 助手 · 会话</span>
           <div class="chat-head-actions">
-            <button id="chatClearBtn" class="mini-btn" title="清空对话">清空</button>
+            <button id="chatNewBtn" class="mini-btn" title="新建自由提问会话">＋ 新会话</button>
+            <button id="chatClearBtn" class="mini-btn" title="删除全部会话">清空</button>
             <button id="chatCloseBtn" class="icon-btn" title="收起">✕</button>
           </div>
         </div>
-        <!-- 引用上下文芯片（有选中/详解时显示） -->
-        <div id="chatContext" class="chat-context hidden"></div>
-        <div id="chatMessages" class="chat-messages"></div>
-        <div class="chat-input-row">
-          <textarea id="chatInput" class="chat-input" rows="1"
-            placeholder="问点什么…（普通问题直接问；想针对某段代码，先在左侧划选）"></textarea>
-          <button id="chatSendBtn" class="btn primary" title="发送">发送</button>
+        <!-- 会话卡片列表：每个详解/引用/自由提问都是独立、可折叠、可删除的一张卡 -->
+        <div id="chatSessions" class="chat-sessions"></div>
+        <!-- 底部输入：发往“当前活动会话” -->
+        <div class="chat-input-wrap">
+          <div id="chatActiveHint" class="chat-active-hint hidden"></div>
+          <div class="chat-input-row">
+            <textarea id="chatInput" class="chat-input" rows="1"
+              placeholder="问点什么…（普通问题直接问；想针对某段代码，先在左侧划选）"></textarea>
+            <button id="chatSendBtn" class="btn primary" title="发送">发送</button>
+          </div>
         </div>
       </aside>
     </div>
