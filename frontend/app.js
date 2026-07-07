@@ -48,6 +48,8 @@ const state = {
   currentFile: null,      // { path, content, language, explained: bool }
   // 右侧对话：多会话隔离
   chat: { sessions: [], activeId: null },
+  // 工作区选择器：当前浏览位置
+  ws: { cwd: "", parent: null },
 };
 
 // ================= 初始化 =================
@@ -59,21 +61,46 @@ async function init() {
   $("#btnRoadmapEdit").addEventListener("click", toggleEdit);
   $("#btnRoadmapSave").addEventListener("click", saveRoadmap);
   bindChatUI();
+  bindWorkspaceUI();
 
   try {
     state.config = await api("/api/config");
-    $("#repoName").textContent = state.config.target_name;
     $("#langSelect").value = state.config.language;
   } catch (e) {
     $("#repoName").textContent = "(配置读取失败)";
   }
   checkHealth();
+
+  if (state.config && state.config.has_workspace) {
+    applyWorkspaceLoaded();
+  } else {
+    applyNoWorkspace();
+  }
+}
+
+// 有工作区：正常加载文件树 / 路线图，并处理 URL 直达参数
+function applyWorkspaceLoaded() {
+  $("#repoName").textContent = state.config.target_name;
   loadTree();
   autoLoadRoadmap();
 
   const params = new URLSearchParams(location.search);
   if (params.get("open")) openFile(params.get("open"));
   else if (params.get("folder")) openFolder(params.get("folder"));
+}
+
+// 无工作区：空状态提示，自动弹出选择器
+function applyNoWorkspace() {
+  $("#repoName").textContent = "未打开工作区";
+  const header = $("#readerHeader");
+  header.innerHTML =
+    '<p class="welcome">欢迎使用 <b>CodeLearn</b>。<br />' +
+    "请先<b>打开一个工作区</b>（任意代码文件夹），即可开始 AI 辅助学习。<br />" +
+    '点右上角「📂 打开工作区」，或使用下方弹出的选择器。</p>';
+  $("#readerBody").innerHTML = "";
+  $("#treeBody").innerHTML = '<p class="hint">尚未打开工作区。</p>';
+  $("#roadmapBody").innerHTML = '<p class="hint">打开工作区后可生成学习路线。</p>';
+  openWorkspaceModal();
 }
 
 async function autoLoadRoadmap() {
@@ -103,6 +130,145 @@ function bindLangSelect() {
       state.config = await postJSON("/api/config/language", { language: e.target.value });
     } catch (_) {}
   });
+}
+
+// ================= 工作区选择 =================
+function bindWorkspaceUI() {
+  $("#btnOpenWorkspace").addEventListener("click", openWorkspaceModal);
+  $("#wsCloseBtn").addEventListener("click", closeWorkspaceModal);
+  $("#workspaceModal").addEventListener("click", (e) => {
+    if (e.target.id === "workspaceModal") closeWorkspaceModal();
+  });
+  $("#wsUpBtn").addEventListener("click", () => {
+    if (state.ws.parent) browseTo(state.ws.parent);
+  });
+  $("#wsOpenHere").addEventListener("click", () => {
+    if (state.ws.cwd) openWorkspace(state.ws.cwd);
+  });
+  $("#wsPasteOpen").addEventListener("click", () => {
+    const v = $("#wsPathInput").value.trim();
+    if (v) openWorkspace(v);
+  });
+  $("#wsPathInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const v = $("#wsPathInput").value.trim();
+      if (v) openWorkspace(v);
+    }
+  });
+}
+
+function openWorkspaceModal() {
+  $("#workspaceModal").classList.remove("hidden");
+  $("#wsError").classList.add("hidden");
+  renderRecents();
+  // 从上次浏览位置或空（后端默认 home）开始
+  browseTo(state.ws.cwd || "");
+}
+
+function closeWorkspaceModal() {
+  // 无工作区时不允许关闭（否则页面无内容可用）
+  if (!state.config || !state.config.has_workspace) return;
+  $("#workspaceModal").classList.add("hidden");
+}
+
+function showWsError(msg) {
+  const box = $("#wsError");
+  box.textContent = msg;
+  box.classList.remove("hidden");
+}
+
+async function browseTo(path) {
+  const list = $("#wsDirList");
+  list.innerHTML = '<p class="hint">加载中…</p>';
+  let data;
+  try {
+    data = await api("/api/workspace/browse?path=" + encodeURIComponent(path || ""));
+  } catch (e) {
+    list.innerHTML = "";
+    list.appendChild(errorEl("无法浏览：" + e.message));
+    return;
+  }
+  state.ws.cwd = data.path;
+  state.ws.parent = data.parent;
+  $("#wsCwd").textContent = data.path;
+  $("#wsUpBtn").disabled = !data.parent;
+
+  list.innerHTML = "";
+  if (!data.dirs.length) {
+    list.appendChild(el("p", "hint", "（无子目录）"));
+    return;
+  }
+  data.dirs.forEach((d) => {
+    const row = el("div", "ws-dir-row");
+    const nav = el("span", "ws-dir-name");
+    nav.appendChild(el("span", "tree-icon dir", "▤"));
+    nav.appendChild(document.createTextNode(" " + d.name));
+    nav.addEventListener("click", () => browseTo(d.path));
+    const openBtn = el("button", "btn ghost ws-dir-open", "打开");
+    openBtn.title = "把该文件夹作为工作区";
+    openBtn.addEventListener("click", (ev) => { ev.stopPropagation(); openWorkspace(d.path); });
+    row.appendChild(nav);
+    row.appendChild(openBtn);
+    list.appendChild(row);
+  });
+}
+
+function renderRecents() {
+  const box = $("#wsRecents");
+  box.innerHTML = "";
+  const recents = (state.config && state.config.recents) || [];
+  if (!recents.length) {
+    box.appendChild(el("p", "hint", "（暂无记录）"));
+    return;
+  }
+  recents.forEach((p) => {
+    const row = el("div", "ws-recent-row");
+    row.textContent = p;
+    row.title = "打开 " + p;
+    row.addEventListener("click", () => openWorkspace(p));
+    box.appendChild(row);
+  });
+}
+
+async function openWorkspace(path) {
+  try {
+    state.config = await postJSON("/api/workspace/open", { path });
+  } catch (e) {
+    showWsError("打开失败：" + e.message);
+    return;
+  }
+  resetForNewWorkspace();
+  $("#repoName").textContent = state.config.target_name;
+  $("#workspaceModal").classList.add("hidden");
+  $("#wsPathInput").value = "";
+  // 加载新库
+  loadTree();
+  autoLoadRoadmap();
+  checkHealth();
+}
+
+// 切换工作区：清空所有与旧库绑定的内存/界面状态
+function resetForNewWorkspace() {
+  // 右侧对话
+  clearAllSessions();
+  // 路线图
+  state.roadmap = null;
+  state.roadmapOrder = [];
+  state.editMode = false;
+  renderRoadmap();
+  $("#roadmapBody").innerHTML = '<p class="hint">点击上方按钮，让 AI 分析整个项目并生成学习路线。</p>';
+  // 阅读区
+  state.activeFilePath = null;
+  state.currentFile = null;
+  $("#readerHeader").innerHTML = "";
+  $("#readerBody").innerHTML = "";
+  // 预加载队列（in-flight 请求任其结束：旧 path 对新根会被后端拒绝，无副作用）
+  preload.queue = [];
+  preload.inflight.clear();
+  preload.done.clear();
+  updatePreloadBadge();
+  // 文件树占位
+  $("#treeBody").innerHTML = '<p class="hint">加载中…</p>';
 }
 
 async function checkHealth() {

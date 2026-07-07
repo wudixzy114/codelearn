@@ -5,12 +5,15 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
-# 目标代码库：默认同级的 xllm，可用第一个参数覆盖
-export CODELEARN_TARGET="${1:-$HERE/../xllm}"
+# 初始工作区（可选）：第一个参数或 CODELEARN_TARGET 指定；
+# 都不给则启动为空，进浏览器后再选。上次打开的工作区会自动恢复。
+if [ "${1:-}" != "" ]; then
+  export CODELEARN_TARGET="$1"
+fi
 export CODELEARN_HOST="${CODELEARN_HOST:-127.0.0.1}"
 export CODELEARN_PORT="${CODELEARN_PORT:-43187}"
 
-echo "[codelearn] target repo : $CODELEARN_TARGET"
+echo "[codelearn] initial target : ${CODELEARN_TARGET:-（无，启动后在 UI 里打开工作区）}"
 echo "[codelearn] serving on  : http://$CODELEARN_HOST:$CODELEARN_PORT"
 
 exec python3 -m uvicorn backend.main:app \

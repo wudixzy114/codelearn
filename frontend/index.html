@@ -17,6 +17,7 @@
       </div>
       <div class="top-actions">
         <span class="preload-badge hidden" id="preloadBadge">预加载中</span>
+        <button id="btnOpenWorkspace" class="btn" title="打开任意文件夹作为工作区">📂 打开工作区</button>
         <span class="health" id="healthDot" title="检查中…">●</span>
         <select id="langSelect" title="讲解语言">
           <option value="zh">中文讲解</option>
@@ -89,6 +90,40 @@
 
     <!-- 收起态下用于重新打开对话栏的悬浮按钮 -->
     <button id="chatFab" class="chat-fab" title="打开 AI 助手">💬 AI</button>
+
+    <!-- 工作区选择器：浏览宿主文件系统 / 粘贴绝对路径 / 最近打开 -->
+    <div id="workspaceModal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-head">
+          <span class="modal-title">打开工作区</span>
+          <button id="wsCloseBtn" class="icon-btn" title="关闭">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="ws-hint">选择任意代码文件夹作为学习目标。可浏览下方目录、粘贴绝对路径，或从最近打开中选择。</p>
+
+          <div class="ws-paste-row">
+            <input id="wsPathInput" class="ws-input" type="text"
+              placeholder="粘贴绝对路径，如 /Users/you/code/myrepo" spellcheck="false" />
+            <button id="wsPasteOpen" class="btn primary">打开</button>
+          </div>
+          <div id="wsError" class="ws-error hidden"></div>
+
+          <div class="ws-browser">
+            <div class="ws-cwd-row">
+              <button id="wsUpBtn" class="btn ghost" title="上级目录">⬆ 上级</button>
+              <span id="wsCwd" class="ws-cwd">—</span>
+              <button id="wsOpenHere" class="btn" title="把当前目录作为工作区">打开此处</button>
+            </div>
+            <div id="wsDirList" class="ws-dir-list"><p class="hint">加载中…</p></div>
+          </div>
+
+          <div class="ws-recents">
+            <div class="ws-recents-title">最近打开</div>
+            <div id="wsRecents" class="ws-recents-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/static/vendor/highlight.min.js"></script>

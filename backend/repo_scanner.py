@@ -66,6 +66,8 @@ class PathError(ValueError):
 def resolve(rel: str) -> Path:
     """把相对目标库的路径解析为绝对路径，并确保不越界。"""
     root = settings.target_repo
+    if root is None:
+        raise PathError("尚未打开工作区")
     rel = (rel or "").strip().lstrip("/")
     abs_path = (root / rel).resolve()
     try:
@@ -77,6 +79,52 @@ def resolve(rel: str) -> Path:
 
 def to_rel(abs_path: Path) -> str:
     return abs_path.resolve().relative_to(settings.target_repo).as_posix()
+
+
+# ---- 宿主文件系统浏览（选工作区用，故意不沙箱） -------------------------
+#
+# 与上面沙箱化的 resolve/list_dir 不同：这里允许浏览整个宿主文件系统，
+# 仅用于让用户在 UI 里挑选一个文件夹作为工作区。CodeLearn 是跑在本机、
+# 单用户的开发工具，暴露本机目录结构属预期行为，不构成越权。
+
+# 单次浏览返回的子目录条数上限（超大目录保护）
+HOST_BROWSE_CAP = 500
+
+
+def list_host_dir(raw: str = "") -> Dict:
+    """列出宿主某目录的直接子目录（不含文件），供工作区选择器导航。
+
+    raw 为空时默认用户主目录。返回 {path, parent, dirs:[{name,path}]}；
+    parent 为 None 表示已在根。跳过隐藏目录、_SKIP_DIRS、无权限项。
+    """
+    base = Path(raw).expanduser() if raw and raw.strip() else Path.home()
+    try:
+        base = base.resolve()
+    except OSError as e:
+        raise PathError(f"无法解析路径：{e}")
+    if not base.is_dir():
+        raise PathError(f"不是目录：{base}")
+
+    dirs: List[Dict] = []
+    try:
+        entries = sorted(base.iterdir(), key=lambda p: p.name.lower())
+    except (PermissionError, OSError) as e:
+        raise PathError(f"目录不可读：{e}")
+
+    for entry in entries:
+        if len(dirs) >= HOST_BROWSE_CAP:
+            break
+        if entry.name.startswith(".") or entry.name in _SKIP_DIRS:
+            continue
+        try:
+            if entry.is_dir():
+                dirs.append({"name": entry.name, "path": str(entry)})
+        except OSError:
+            continue  # 断链符号链接 / 无权限
+
+    parent = str(base.parent) if base.parent != base else None
+    return {"path": str(base), "parent": parent, "dirs": dirs}
+
 
 
 # ---- 目录树（懒加载，单层） ---------------------------------------------

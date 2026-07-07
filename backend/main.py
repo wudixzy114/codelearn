@@ -1,6 +1,8 @@
 """FastAPI 应用：API 路由 + 静态前端。
 
-启动：CODELEARN_TARGET=<repo> uvicorn backend.main:app
+工作区（目标代码库）可在 UI 里随时打开任意文件夹，无需重启。
+初始工作区可选，由环境变量 CODELEARN_TARGET 或上次打开的记录决定；都没有则空。
+启动：uvicorn backend.main:app（可选 CODELEARN_TARGET=<repo>）
 LLM 调用是同步阻塞的，放进线程池执行，避免卡住事件循环。
 """
 from __future__ import annotations
@@ -14,9 +16,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import annotator, folder_learn, llm_client, prompts, repo_scanner, roadmap
-from .config import FRONTEND_DIR, settings
+from .config import FRONTEND_DIR, WorkspaceError, settings
 
-app = FastAPI(title="CodeLearn", version="0.1.0")
+app = FastAPI(title="CodeLearn", version="1.0.0")
+
+
+@app.exception_handler(WorkspaceError)
+async def _workspace_error_handler(_request, exc: WorkspaceError):
+    """未打开工作区 / 工作区非法：统一 400，避免直接读 cache_dir 的路由 500。"""
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 async def _run(fn, *args, **kwargs):
@@ -41,13 +49,39 @@ async def set_language(body: LangBody):
     return settings.as_public_dict()
 
 
+# ---- 工作区：打开任意文件夹 + 浏览宿主文件系统 --------------------------
+
+class OpenWorkspaceBody(BaseModel):
+    path: str
+
+
+@app.post("/api/workspace/open")
+async def open_workspace(body: OpenWorkspaceBody):
+    """校验并切换到新工作区，返回更新后的公开配置。"""
+    try:
+        await _run(settings.open_workspace, body.path)
+    except WorkspaceError as e:
+        raise HTTPException(400, str(e))
+    return settings.as_public_dict()
+
+
+@app.get("/api/workspace/browse")
+async def browse_workspace(path: str = Query("")):
+    """列出宿主某目录的子目录，供选择器导航（不沙箱，仅列目录）。"""
+    try:
+        return await _run(repo_scanner.list_host_dir, path)
+    except repo_scanner.PathError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/health")
 async def health():
     result = await _run(llm_client.ping)
+    repo = settings.target_repo
     return {
         "server": "ok",
-        "target_repo": str(settings.target_repo),
-        "target_exists": settings.target_repo.is_dir(),
+        "target_repo": str(repo) if repo else None,
+        "target_exists": bool(repo and repo.is_dir()),
         "llm": result,
     }
 
