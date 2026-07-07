@@ -206,12 +206,52 @@ async function refreshReady(paths) {
 async function loadRoadmap(force) {
   const body = $("#roadmapBody");
   body.innerHTML = "";
-  body.appendChild(loadingEl(force ? "正在重新生成路线图…" : "正在加载/生成路线图…"));
+  const box = loadingEl(force ? "正在重新生成路线图…" : "正在加载/生成路线图…");
+  const prog = el("div", "roadmap-progress");
+  box.appendChild(prog);
+  body.appendChild(box);
+
+  const url = force ? "/api/roadmap/regenerate" : "/api/roadmap";
+  const method = force ? "POST" : "GET";
   try {
-    const data = force
-      ? await postJSON("/api/roadmap/regenerate", {})
-      : await api("/api/roadmap");
-    setRoadmap(data);
+    const res = await fetch(url, {
+      method,
+      headers: force ? { "Content-Type": "application/json" } : undefined,
+      body: force ? JSON.stringify({}) : undefined,
+    });
+    if (!res.ok || !res.body) {
+      let msg = res.status + "";
+      try { const j = await res.json(); if (j.detail) msg = j.detail; } catch (_) {}
+      throw new Error(msg);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let result = null;
+    let errMsg = null;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const events = buf.split("\n\n");
+      buf = events.pop();
+      for (const ev of events) {
+        const dataLines = ev.split("\n").filter((l) => l.startsWith("data: "));
+        if (!dataLines.length) continue;
+        const payload = dataLines.map((l) => l.slice(6)).join("\n");
+        if (payload === "[DONE]") continue;
+        if (payload.startsWith("[[progress]] ")) {
+          prog.textContent = "正在探索：" + payload.slice(13).trim();
+        } else if (payload.startsWith("[[result]] ")) {
+          try { result = JSON.parse(payload.slice(11)); } catch (_) {}
+        } else if (payload.startsWith("[ERROR]")) {
+          errMsg = payload.slice(7).trim();
+        }
+      }
+    }
+    if (errMsg) throw new Error(errMsg);
+    if (!result) throw new Error("未收到路线图结果");
+    setRoadmap(result);
   } catch (e) {
     body.innerHTML = "";
     body.appendChild(errorEl("路线图生成失败：" + e.message));
@@ -1042,18 +1082,16 @@ async function streamInto(url, body, bubble, sess) {
         else acc += payload;
         renderMarkdownInto(bubble, acc);
         bubble.appendChild(cursor);
-        scrollBubbleBottom(bubble);
         scrollSessionBottom(sess);
       }
     }
   } catch (e) {
     acc += (acc ? "\n\n" : "") + "⚠️ 请求失败：" + e.message;
     renderMarkdownInto(bubble, acc);
-    scrollBubbleBottom(bubble);
+    scrollSessionBottom(sess);
   } finally {
     cursor.remove();
     $("#chatSendBtn").disabled = false;
-    scrollBubbleBottom(bubble);
     scrollSessionBottom(sess);
   }
   return acc;
@@ -1075,10 +1113,6 @@ function scrollSessionBottom(sess) {
   if (sess && sess.node) sess.node.scrollIntoView({ block: "nearest" });
   const box = $("#chatSessions");
   box.scrollTop = box.scrollHeight;
-}
-
-function scrollBubbleBottom(bubble) {
-  if (bubble) bubble.scrollTop = bubble.scrollHeight;
 }
 
 // ---- 极简 Markdown 渲染（代码块/行内码/粗体/标题/列表），安全转义 ----

@@ -21,7 +21,7 @@ pip install -r requirements.txt
 ./run.sh /path/to/your/repo
 ```
 
-浏览器打开 http://127.0.0.1:8000
+浏览器打开 http://127.0.0.1:43187
 
 ## 配置
 
@@ -40,7 +40,7 @@ XIAOSHU_MODEL=DeepSeek-V4-Pro-joybuilder
 | `CODELEARN_TARGET` | `../xllm` | 目标代码库路径 |
 | `CODELEARN_LANG` | `zh` | 讲解语言（`zh`/`en`，前端也可切换） |
 | `CODELEARN_CHUNK_LINES` | `400` | 大文件分块窗口行数 |
-| `CODELEARN_PORT` | `8000` | 服务端口 |
+| `CODELEARN_PORT` | `43187` | 服务端口 |
 
 ## 缓存
 

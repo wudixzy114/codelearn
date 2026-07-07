@@ -140,6 +140,37 @@ def chat_json(
     raise last_err if last_err else LLMError("LLM 调用失败（未知原因）")
 
 
+def chat_json_messages(
+    messages,
+    *,
+    temperature: float = 0.2,
+    max_tokens: int = 4096,
+    retries: int = 1,
+) -> Any:
+    """发起一次多轮对话并返回解析后的 JSON 对象。
+
+    与 chat_json 共用解析/重试逻辑，但接收完整 messages 列表（agent 循环
+    需要累积的对话历史，而非固定的 system+user 两条）。
+    """
+    client = _get_client()
+    last_err: Optional[Exception] = None
+    for _ in range(retries + 1):
+        try:
+            resp = client.chat.completions.create(
+                model=settings.llm_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            content = resp.choices[0].message.content or ""
+            return parse_json(content)
+        except LLMError as e:
+            last_err = e
+        except Exception as e:  # 网络/网关错误
+            last_err = LLMError(f"LLM 调用失败：{e}")
+    raise last_err if last_err else LLMError("LLM 调用失败（未知原因）")
+
+
 def chat_stream(messages, *, temperature: float = 0.3, max_tokens: int = 2048):
     """流式对话：逐段 yield 文本增量。messages 为 OpenAI 格式的消息列表。
 

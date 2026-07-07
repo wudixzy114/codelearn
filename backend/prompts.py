@@ -117,25 +117,61 @@ _ROADMAP_SYSTEM = {
     ),
 }
 
-_ROADMAP_USER = {
+# ---- agent 版路线图：ReAct 循环，可自主读真实源码 -------------------------
+
+_ROADMAP_AGENT_SYSTEM = {
+    "zh": (
+        "你是一位技术导师，要为一个大型代码库设计“从零到理解”的学习路线。"
+        "与以往不同：你可以**主动探索真实源码**，而不是只凭目录名猜测。\n\n"
+        "你拥有三个只读工具：\n"
+        "- list_dir(path)：列出某目录的直接子项；\n"
+        "- read_file(path, start?, end?)：读取文件内容，可选行区间（大文件建议先读开头再按需细看）；\n"
+        "- search(query)：在源码里做文本搜索，返回 path:line 命中，用于快速定位关键定义/调用。\n\n"
+        "工作方式（ReAct）：每一步只输出**一个 JSON 对象**，二选一：\n"
+        "1) 调用工具：{\"thought\":\"我要确认什么\",\"action\":\"read_file\",\"action_input\":{\"path\":\"...\",\"start\":1,\"end\":80}}\n"
+        "2) 产出最终路线图：{\"thought\":\"依据已读代码\",\"final\":{...路线图...}}\n"
+        "只输出该 JSON，不要额外文字、不要 Markdown 围栏。\n\n"
+        "探索策略：先看入口点建立整体印象 → 顺依赖方向读关键文件（基础工具/配置 → 核心领域模型 → 上层子系统 → 编排/服务层）"
+        "→ 用 search 快速定位跨文件关系。读到足以规划出准确、有依据的路线时即收尾，不必读遍全库。\n"
+        "最终 final 的结构与要求：\n"
+        "{\"title\":\"<路线标题>\","
+        "\"summary\":\"<2-3 句概括项目做什么 + 这条路线的思路>\","
+        "\"steps\":[{\"title\":\"<步骤标题>\",\"goal\":\"<读完能理解什么>\","
+        "\"description\":\"<讲清为什么按此顺序、各文件关系；应引用你**实际读到**的代码细节，而非泛泛而谈>\","
+        "\"files\":[\"<相对路径，必须真实存在>\"]}]}\n"
+        "步骤 8-14 步，每步 2-8 个关键文件，循序渐进。"
+    ),
+    "en": (
+        "You are a technical mentor designing a zero-to-understanding learning path for a "
+        "large codebase. Unlike before, you can **actively explore the real source**, not just "
+        "guess from directory names.\n\n"
+        "You have three read-only tools:\n"
+        "- list_dir(path): list a directory's direct children;\n"
+        "- read_file(path, start?, end?): read file content, optional line range (for big files, "
+        "read the head first, then zoom in);\n"
+        "- search(query): text search over source, returns path:line hits to locate key defs/calls.\n\n"
+        "Work in ReAct style: each step output **exactly one JSON object**, either:\n"
+        "1) Call a tool: {\"thought\":\"what I want to confirm\",\"action\":\"read_file\",\"action_input\":{\"path\":\"...\",\"start\":1,\"end\":80}}\n"
+        "2) Emit the final roadmap: {\"thought\":\"based on code I read\",\"final\":{...roadmap...}}\n"
+        "Output only that JSON — no extra prose, no Markdown fences.\n\n"
+        "Strategy: start at entry points for a mental model → follow dependency direction "
+        "(foundational utils/config → core domain model → higher subsystems → orchestration/service) "
+        "→ use search to locate cross-file relations. Stop once you can plan an accurate, grounded path; "
+        "you need not read the whole repo.\n"
+        "Final structure:\n"
+        "{\"title\":\"...\",\"summary\":\"...\","
+        "\"steps\":[{\"title\":\"...\",\"goal\":\"...\","
+        "\"description\":\"<why this order, how files relate; cite details you ACTUALLY read>\","
+        "\"files\":[\"<relative path, must exist>\"]}]}\n"
+        "8-14 steps, 2-8 key files each, progressive."
+    ),
+}
+
+_ROADMAP_AGENT_SEED = {
     "zh": """项目名：{repo_name}
 
-请规划一条学习路线，遵循以下原则：
-- 先从“入口点 + 全局概览”开始，建立整体印象；
-- 中段按“依赖方向自底向上”：先基础词汇/工具/配置，再核心领域模型，再上层子系统；
-- 末段回到“编排层 / 服务层”，闭合整个调用链；
-- 每一步聚焦一个主题，列出该步需要阅读的具体文件（相对路径），文件要真实存在于结构图中；
-- 步骤数量控制在 8-14 步，循序渐进，避免一步塞太多文件（每步 2-8 个关键文件为宜）。
-
-只输出如下 JSON：
-{{"title":"<路线标题>",
-  "summary":"<用 2-3 句概括这个项目是做什么的，以及这条路线的整体思路>",
-  "steps":[
-    {{"title":"<步骤标题>",
-      "goal":"<读完这步能理解什么>",
-      "description":"<这一步的讲解，说明为什么按此顺序、各文件之间的关系>",
-      "files":["<相对路径>", ...]}}
-  ]}}
+下面是这个项目的结构概览与现有文档摘录，作为你探索的**起点地图**。
+请据此挑选值得深入的入口与核心文件，用工具实际读取后，再规划出一条有依据的学习路线。
 
 ==== 项目结构图 ====
 {repo_map}
@@ -145,24 +181,65 @@ _ROADMAP_USER = {
 """,
     "en": """Project: {repo_name}
 
-Design a learning path following these principles:
-- Start with entry points + a global overview to form a mental model;
-- Middle: bottom-up by dependency direction (foundational vocab/utils/config, then core
-  domain model, then higher-level subsystems);
-- End: return to the orchestration/service layer to close the call chain;
-- Each step focuses on one theme and lists the concrete files (relative paths) to read;
-  files must actually exist in the structure map;
-- 8-14 steps, progressive, 2-8 key files per step.
-
-Output only:
-{{"title":"...","summary":"...",
-  "steps":[{{"title":"...","goal":"...","description":"...","files":["..."]}}]}}
+Below is a structure overview and doc excerpts as your **starting map** for exploration.
+Use it to pick entry points and core files worth reading, actually read them with the tools,
+then design a grounded learning path.
 
 ==== Structure map ====
 {repo_map}
 
 ==== Existing docs ====
 {docs}
+""",
+}
+
+_ROADMAP_FINALIZE_USER = {
+    "zh": """项目名：{repo_name}
+
+你已经探索并阅读了这个项目的若干真实源码（摘录见下）。现在请**基于这些实际读到的代码**，
+规划一条学习路线，遵循以下原则：
+- 先从“入口点 + 全局概览”开始，建立整体印象；
+- 中段按“依赖方向自底向上”：先基础词汇/工具/配置，再核心领域模型，再上层子系统；
+- 末段回到“编排层 / 服务层”，闭合整个调用链；
+- 每一步聚焦一个主题，列出该步需要阅读的具体文件（相对路径），文件要真实存在；
+- description 要引用你实际读到的代码细节（类名/函数/数据流），不要泛泛而谈；
+- 步骤 8-14 步，每步 2-8 个关键文件。
+
+只输出如下 JSON（不要围栏、不要多余文字）：
+{{"title":"<路线标题>",
+  "summary":"<2-3 句概括项目做什么 + 这条路线的思路>",
+  "steps":[
+    {{"title":"<步骤标题>","goal":"<读完能理解什么>",
+      "description":"<为什么按此顺序、各文件关系，引用真实代码细节>",
+      "files":["<相对路径>", ...]}}
+  ]}}
+
+==== 项目结构图 ====
+{repo_map}
+
+==== 你已阅读的源码摘录 ====
+{findings}
+""",
+    "en": """Project: {repo_name}
+
+You have explored and read real source from this project (excerpts below). Now, **based on the
+code you actually read**, design a learning path following these principles:
+- Start with entry points + a global overview;
+- Middle: bottom-up by dependency (foundational utils/config → core domain model → higher subsystems);
+- End: return to the orchestration/service layer to close the call chain;
+- Each step focuses on one theme and lists concrete files (relative paths) that must exist;
+- description must cite real code details (class/function names, data flow), not vague prose;
+- 8-14 steps, 2-8 key files each.
+
+Output only this JSON (no fences, no extra text):
+{{"title":"...","summary":"...",
+  "steps":[{{"title":"...","goal":"...","description":"...","files":["..."]}}]}}
+
+==== Structure map ====
+{repo_map}
+
+==== Source excerpts you have read ====
+{findings}
 """,
 }
 
@@ -286,10 +363,32 @@ _QUOTE_CONTEXT = {
 Answer the following questions with this selected code in mind.""",
 }
 
-# 仅文件级上下文（未选中具体片段，但在某文件里提问）
+# 仅文件级上下文（未选中具体片段，但在某文件里提问）——注入文件实际内容
 _FILE_CONTEXT = {
-    "zh": "[上下文] 学习者正在阅读文件 `{path}`（{language}）。如相关可结合该文件作答。",
-    "en": "[Context] The learner is reading `{path}` ({language}). Use it if relevant.",
+    "zh": """[上下文] 学习者正在阅读文件 `{path}`（{language}），完整内容如下（带行号）：
+```{language}
+{code}
+```
+请优先结合这个文件的实际代码回答后续问题；若问题超出该文件范围，再凭通用工程知识作答并说明。""",
+    "en": """[Context] The learner is reading `{path}` ({language}). Full content below (with line numbers):
+```{language}
+{code}
+```
+Answer questions using this file's actual code first; if a question goes beyond it, fall back to general knowledge and say so.""",
+}
+
+# 文件过大时的精简上下文（只给头部 + 说明）
+_FILE_CONTEXT_TRUNCATED = {
+    "zh": """[上下文] 学习者正在阅读文件 `{path}`（{language}），文件较大（共 {total} 行），以下为开头 {shown} 行：
+```{language}
+{code}
+```
+请结合这段内容作答；如需文件后续部分的信息，请说明这一点。""",
+    "en": """[Context] The learner is reading `{path}` ({language}); it is large ({total} lines). First {shown} lines:
+```{language}
+{code}
+```
+Answer using this excerpt; if you need later parts of the file, say so.""",
 }
 
 
@@ -327,6 +426,10 @@ def file_context(lang: str, **kw) -> str:
     return _pick(_FILE_CONTEXT, lang).format(**kw)
 
 
+def file_context_truncated(lang: str, **kw) -> str:
+    return _pick(_FILE_CONTEXT_TRUNCATED, lang).format(**kw)
+
+
 def overview_system(lang: str) -> str:
     return _pick(_OVERVIEW_SYSTEM, lang)
 
@@ -339,8 +442,16 @@ def roadmap_system(lang: str) -> str:
     return _pick(_ROADMAP_SYSTEM, lang)
 
 
-def roadmap_user(lang: str, **kw) -> str:
-    return _pick(_ROADMAP_USER, lang).format(**kw)
+def roadmap_agent_system(lang: str) -> str:
+    return _pick(_ROADMAP_AGENT_SYSTEM, lang)
+
+
+def roadmap_agent_seed(lang: str, **kw) -> str:
+    return _pick(_ROADMAP_AGENT_SEED, lang).format(**kw)
+
+
+def roadmap_finalize_user(lang: str, **kw) -> str:
+    return _pick(_ROADMAP_FINALIZE_USER, lang).format(**kw)
 
 
 def folder_system(lang: str) -> str:

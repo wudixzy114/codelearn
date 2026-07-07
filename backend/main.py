@@ -183,6 +183,36 @@ class ChatBody(BaseModel):
     sel_end: Optional[int] = None
 
 
+# 文件级问答注入的内容上限（字符）。超出则只给头部并注明。
+_CHAT_FILE_CHAR_CAP = 12000
+
+
+def _file_context_with_content(lang: str, path: str, language: str) -> str:
+    """构建带文件实际内容的问答上下文；读失败退回仅路径提示。"""
+    try:
+        text, _ = repo_scanner.read_file(path)
+    except repo_scanner.PathError:
+        # 读不到（二进制/越界等）→ 退回旧的仅路径提示，避免整条请求失败
+        return prompts.file_context(lang, path=path, language=language, code="（无法读取该文件内容）")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    total = len(lines)
+    numbered = "\n".join(f"{i + 1}\t{ln}" for i, ln in enumerate(lines))
+
+    if len(numbered) <= _CHAT_FILE_CHAR_CAP:
+        return prompts.file_context(lang, path=path, language=language, code=numbered)
+    # 过大：截到上限（按行边界），走 truncated 模板
+    clipped = numbered[:_CHAT_FILE_CHAR_CAP]
+    nl = clipped.rfind("\n")
+    if nl > 0:
+        clipped = clipped[:nl]
+    shown = clipped.count("\n") + 1
+    return prompts.file_context_truncated(
+        lang, path=path, language=language, code=clipped, total=total, shown=shown,
+    )
+
+
 @app.post("/api/chat")
 async def chat(body: ChatBody):
     """右侧对话：三种任务合一——
@@ -204,7 +234,7 @@ async def chat(body: ChatBody):
         )
     elif body.file_path:
         language = repo_scanner.lang_for(body.file_path)
-        ctx = prompts.file_context(lang, path=body.file_path, language=language)
+        ctx = _file_context_with_content(lang, body.file_path, language)
     if ctx:
         msgs.append({"role": "system", "content": ctx})
 
@@ -239,10 +269,11 @@ async def folder(body: FolderBody):
 
 @app.get("/api/roadmap")
 async def get_roadmap():
-    try:
-        return await _run(roadmap.generate, False)
-    except llm_client.LLMError as e:
-        raise HTTPException(502, str(e))
+    """流式生成路线图：SSE 逐条推送探索进度，末条携带最终 JSON。
+
+    命中新鲜缓存时会立即只推一条 result 事件。
+    """
+    return _sse(roadmap.generate_stream(False))
 
 
 @app.get("/api/roadmap/cached")
@@ -259,10 +290,8 @@ async def get_roadmap_cached():
 
 @app.post("/api/roadmap/regenerate")
 async def regenerate_roadmap():
-    try:
-        return await _run(roadmap.generate, True)
-    except llm_client.LLMError as e:
-        raise HTTPException(502, str(e))
+    """强制重新生成（忽略缓存），同样流式返回进度 + 最终结果。"""
+    return _sse(roadmap.generate_stream(True))
 
 
 class RoadmapSaveBody(BaseModel):
