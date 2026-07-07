@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from . import annotator, folder_learn, llm_client, prompts, repo_scanner, roadmap
 from .config import FRONTEND_DIR, WorkspaceError, settings
 
-app = FastAPI(title="CodeLearn", version="1.0.0")
+app = FastAPI(title="CodeLearn", version="1.0.1")
 
 
 @app.exception_handler(WorkspaceError)

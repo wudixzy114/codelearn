@@ -136,10 +136,19 @@ def list_dir(rel: str = "") -> Dict:
         raise PathError(f"不是目录：{rel}")
     dirs: List[Dict] = []
     files: List[Dict] = []
-    for entry in sorted(base.iterdir(), key=lambda p: p.name.lower()):
+    try:
+        entries = sorted(base.iterdir(), key=lambda p: p.name.lower())
+    except (PermissionError, OSError) as e:
+        # macOS TCC 保护目录（Desktop/Documents 等）iterdir 会抛 PermissionError
+        raise PathError(f"目录不可读：{rel or '.'}（{e.strerror or e}）")
+    for entry in entries:
         if entry.name.startswith("."):
             continue
-        if entry.is_dir():
+        try:
+            is_dir = entry.is_dir()
+        except OSError:
+            continue  # 断链符号链接 / 无权限的条目跳过
+        if is_dir:
             if entry.name in _SKIP_DIRS:
                 continue
             dirs.append({"name": entry.name, "path": to_rel(entry), "type": "dir"})
