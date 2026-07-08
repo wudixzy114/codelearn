@@ -16,6 +16,8 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 
+from . import providers
+
 # 目录锚点
 BACKEND_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BACKEND_DIR.parent               # codelearn/
@@ -66,8 +68,9 @@ class Settings:
     """全局设置对象，进程内单例（见文件底部 settings）。"""
 
     def __init__(self) -> None:
-        # 持久化的 last / recents
+        # 持久化的 last / recents / model
         self._recents: List[str] = []
+        self._persisted_model: Optional[str] = None
         last = self._load_persisted()
 
         # 目标代码库（工作区）：CODELEARN_TARGET > 持久化的 last > 无（None）
@@ -79,7 +82,8 @@ class Settings:
         # LLM 网关
         self.llm_api_key: Optional[str] = os.getenv("JD_LLM_API_KEY")
         self.llm_base_url: Optional[str] = os.getenv("JD_LLM_BASE_URL")
-        self.llm_model: str = os.getenv("XIAOSHU_MODEL", "DeepSeek-V4-Pro")
+        # 当前模型：持久化的 model（合法）> 环境 XIAOSHU_MODEL（合法）> 注册表默认
+        self.llm_model: str = self._initial_model()
 
         # 分块参数（大文件逐块讲解）
         self.chunk_lines: int = int(os.getenv("CODELEARN_CHUNK_LINES", "400"))
@@ -104,6 +108,15 @@ class Settings:
                 pass  # 上次的目录已失效
         return None
 
+    def _initial_model(self) -> str:
+        """初始模型：持久化的（合法）> 环境 XIAOSHU_MODEL（合法）> 注册表默认。"""
+        if self._persisted_model and providers.is_valid_model(self._persisted_model):
+            return self._persisted_model
+        env_model = os.getenv("XIAOSHU_MODEL")
+        if env_model and providers.is_valid_model(env_model):
+            return env_model
+        return providers.DEFAULT_MODEL_ID
+
     # ---- 持久化：last + recents -----------------------------------------
 
     def _load_persisted(self) -> Optional[str]:
@@ -114,6 +127,8 @@ class Settings:
             return None
         recents = data.get("recents") or []
         self._recents = [r for r in recents if isinstance(r, str) and Path(r).is_dir()]
+        model = data.get("model")
+        self._persisted_model = model if isinstance(model, str) else None
         last = data.get("last")
         return last if isinstance(last, str) else None
 
@@ -122,6 +137,7 @@ class Settings:
         payload = {
             "last": str(self.target_repo) if self.target_repo else None,
             "recents": self._recents,
+            "model": self.llm_model,
         }
         try:
             WORKSPACES_FILE.write_text(
@@ -164,6 +180,14 @@ class Settings:
         if lang in ("zh", "en"):
             self.language = lang
 
+    def set_model(self, model_id: str) -> str:
+        """切换当前模型（须属于注册表），持久化并返回生效的模型 id。"""
+        if not providers.is_valid_model(model_id):
+            raise WorkspaceError(f"未知模型：{model_id}")
+        self.llm_model = model_id
+        self._persist()
+        return model_id
+
     def as_public_dict(self) -> dict:
         """暴露给前端的安全配置（不含密钥）。"""
         return {
@@ -173,6 +197,7 @@ class Settings:
             "recents": self.recents,
             "language": self.language,
             "model": self.llm_model,
+            "models": providers.MODELS,
             "llm_configured": bool(self.llm_api_key and self.llm_base_url),
         }
 

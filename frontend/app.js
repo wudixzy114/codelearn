@@ -56,6 +56,7 @@ const state = {
 async function init() {
   bindTabs();
   bindLangSelect();
+  bindModelSelect();
   $("#btnRoadmap").addEventListener("click", () => loadRoadmap(false));
   $("#btnRoadmapRegen").addEventListener("click", () => loadRoadmap(true));
   $("#btnRoadmapEdit").addEventListener("click", toggleEdit);
@@ -66,6 +67,7 @@ async function init() {
   try {
     state.config = await api("/api/config");
     $("#langSelect").value = state.config.language;
+    populateModelSelect();
   } catch (e) {
     $("#repoName").textContent = "(配置读取失败)";
   }
@@ -129,6 +131,40 @@ function bindLangSelect() {
     try {
       state.config = await postJSON("/api/config/language", { language: e.target.value });
     } catch (_) {}
+  });
+}
+
+// 用注册表填充模型下拉，选中当前模型
+function populateModelSelect() {
+  const sel = $("#modelSelect");
+  if (!sel || !state.config) return;
+  const models = state.config.models || [];
+  sel.innerHTML = "";
+  models.forEach((m) => {
+    const opt = el("option", null, m.label || m.id);
+    opt.value = m.id;
+    sel.appendChild(opt);
+  });
+  if (state.config.model) sel.value = state.config.model;
+}
+
+// 切换模型：通知后端 → 更新 state → 重测连通性
+function bindModelSelect() {
+  const sel = $("#modelSelect");
+  if (!sel) return;
+  sel.addEventListener("change", async (e) => {
+    const dot = $("#healthDot");
+    dot.className = "health";
+    dot.title = "切换模型中…";
+    try {
+      state.config = await postJSON("/api/config/model", { model: e.target.value });
+      populateModelSelect();
+    } catch (err) {
+      dot.className = "health bad";
+      dot.title = "切换模型失败：" + err.message;
+      return;
+    }
+    checkHealth();
   });
 }
 

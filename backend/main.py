@@ -49,6 +49,20 @@ async def set_language(body: LangBody):
     return settings.as_public_dict()
 
 
+class ModelBody(BaseModel):
+    model: str
+
+
+@app.post("/api/config/model")
+async def set_model(body: ModelBody):
+    """切换当前 LLM 模型（须属于注册表），返回更新后的公开配置。"""
+    try:
+        settings.set_model(body.model)
+    except WorkspaceError as e:
+        raise HTTPException(400, str(e))
+    return settings.as_public_dict()
+
+
 # ---- 工作区：打开任意文件夹 + 浏览宿主文件系统 --------------------------
 
 class OpenWorkspaceBody(BaseModel):
