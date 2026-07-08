@@ -51,13 +51,14 @@ async def set_language(body: LangBody):
 
 class ModelBody(BaseModel):
     model: str
+    role: str = "chat"          # 'analysis' | 'chat'
 
 
 @app.post("/api/config/model")
 async def set_model(body: ModelBody):
-    """切换当前 LLM 模型（须属于注册表），返回更新后的公开配置。"""
+    """切换某角色的 LLM 模型（须属于注册表），返回更新后的公开配置。"""
     try:
-        settings.set_model(body.model)
+        settings.set_model(body.model, body.role)
     except WorkspaceError as e:
         raise HTTPException(400, str(e))
     return settings.as_public_dict()
@@ -89,13 +90,15 @@ async def browse_workspace(path: str = Query("")):
 
 
 @app.get("/api/health")
-async def health():
-    result = await _run(llm_client.ping)
+async def health(role: str = Query("chat")):
+    """健康检查：测指定角色（analysis/chat）的模型连通性。"""
+    result = await _run(llm_client.ping, role)
     repo = settings.target_repo
     return {
         "server": "ok",
         "target_repo": str(repo) if repo else None,
         "target_exists": bool(repo and repo.is_dir()),
+        "role": role,
         "llm": result,
     }
 

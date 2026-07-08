@@ -68,9 +68,10 @@ class Settings:
     """全局设置对象，进程内单例（见文件底部 settings）。"""
 
     def __init__(self) -> None:
-        # 持久化的 last / recents / model
+        # 持久化的 last / recents / models
         self._recents: List[str] = []
-        self._persisted_model: Optional[str] = None
+        self._persisted_analysis: Optional[str] = None
+        self._persisted_chat: Optional[str] = None
         last = self._load_persisted()
 
         # 目标代码库（工作区）：CODELEARN_TARGET > 持久化的 last > 无（None）
@@ -82,14 +83,28 @@ class Settings:
         # LLM 网关
         self.llm_api_key: Optional[str] = os.getenv("JD_LLM_API_KEY")
         self.llm_base_url: Optional[str] = os.getenv("JD_LLM_BASE_URL")
-        # 当前模型：持久化的 model（合法）> 环境 XIAOSHU_MODEL（合法）> 注册表默认
-        self.llm_model: str = self._initial_model()
+        # 两个独立模型角色，互不干扰：
+        # - analysis_model：项目分析（路线图/注解/agent 循环），要求稳定；
+        # - chat_model：右侧对话，可随时切换测试而不影响正在进行的分析。
+        # 解析顺序均为：持久化（合法）> 环境 XIAOSHU_MODEL（合法）> 注册表默认。
+        self.analysis_model: str = self._initial_model(self._persisted_analysis)
+        self.chat_model: str = self._initial_model(self._persisted_chat)
 
         # 分块参数（大文件逐块讲解）
         self.chunk_lines: int = int(os.getenv("CODELEARN_CHUNK_LINES", "400"))
         self.chunk_overlap: int = int(os.getenv("CODELEARN_CHUNK_OVERLAP", "20"))
         # 单次讲解可处理的最大文件行数（超大文件截断保护）
         self.max_file_lines: int = int(os.getenv("CODELEARN_MAX_FILE_LINES", "6000"))
+
+    # ---- 角色 → 模型 / 思考档位 -----------------------------------------
+
+    def model_for(self, role: str) -> str:
+        """按角色取模型 id。role: 'analysis' | 'chat'。"""
+        return self.chat_model if role == "chat" else self.analysis_model
+
+    def thinking_for(self, role: str) -> str:
+        """按角色取思考档位：对话拉满(max)，分析适中(medium)。"""
+        return "max" if role == "chat" else "medium"
 
     # ---- 初始工作区解析 --------------------------------------------------
 
@@ -108,10 +123,10 @@ class Settings:
                 pass  # 上次的目录已失效
         return None
 
-    def _initial_model(self) -> str:
+    def _initial_model(self, persisted: Optional[str]) -> str:
         """初始模型：持久化的（合法）> 环境 XIAOSHU_MODEL（合法）> 注册表默认。"""
-        if self._persisted_model and providers.is_valid_model(self._persisted_model):
-            return self._persisted_model
+        if persisted and providers.is_valid_model(persisted):
+            return persisted
         env_model = os.getenv("XIAOSHU_MODEL")
         if env_model and providers.is_valid_model(env_model):
             return env_model
@@ -127,8 +142,13 @@ class Settings:
             return None
         recents = data.get("recents") or []
         self._recents = [r for r in recents if isinstance(r, str) and Path(r).is_dir()]
-        model = data.get("model")
-        self._persisted_model = model if isinstance(model, str) else None
+        # 两个角色模型；兼容旧字段 "model"（视为两者的初值）。
+        legacy = data.get("model")
+        legacy = legacy if isinstance(legacy, str) else None
+        am = data.get("analysis_model")
+        cm = data.get("chat_model")
+        self._persisted_analysis = am if isinstance(am, str) else legacy
+        self._persisted_chat = cm if isinstance(cm, str) else legacy
         last = data.get("last")
         return last if isinstance(last, str) else None
 
@@ -137,7 +157,8 @@ class Settings:
         payload = {
             "last": str(self.target_repo) if self.target_repo else None,
             "recents": self._recents,
-            "model": self.llm_model,
+            "analysis_model": self.analysis_model,
+            "chat_model": self.chat_model,
         }
         try:
             WORKSPACES_FILE.write_text(
@@ -180,11 +201,17 @@ class Settings:
         if lang in ("zh", "en"):
             self.language = lang
 
-    def set_model(self, model_id: str) -> str:
-        """切换当前模型（须属于注册表），持久化并返回生效的模型 id。"""
+    def set_model(self, model_id: str, role: str = "chat") -> str:
+        """切换某角色的模型（须属于注册表），持久化并返回生效的模型 id。
+
+        role: 'analysis'（项目分析）| 'chat'（右侧对话）。
+        """
         if not providers.is_valid_model(model_id):
             raise WorkspaceError(f"未知模型：{model_id}")
-        self.llm_model = model_id
+        if role == "analysis":
+            self.analysis_model = model_id
+        else:
+            self.chat_model = model_id
         self._persist()
         return model_id
 
@@ -196,7 +223,8 @@ class Settings:
             "has_workspace": self.target_repo is not None,
             "recents": self.recents,
             "language": self.language,
-            "model": self.llm_model,
+            "analysis_model": self.analysis_model,
+            "chat_model": self.chat_model,
             "models": providers.MODELS,
             "llm_configured": bool(self.llm_api_key and self.llm_base_url),
         }

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, Optional
 
 from . import agent_tools, llm_client
+from .config import settings
 
 
 @dataclass
@@ -58,9 +59,10 @@ def run(
 ) -> Iterator[Dict[str, Any]]:
     """驱动 ReAct 循环。
 
-    参数 finalize: 可选回调 finalize(findings: list[str]) -> data。findings 是
-    探索期 read_file/search 收集到的观测文本。收尾时优先用它在**全新、无工具**的
-    上下文里产出最终结果——避免模型被自己的 action 历史带偏、持续调用工具不收尾。
+    参数 finalize: 可选回调 finalize(findings: list[str], model: str) -> data。
+    findings 是探索期 read_file/search 收集到的观测文本，model 是本轮快照的分析模型。
+    收尾时优先用它在**全新、无工具**的上下文里产出最终结果——避免模型被自己的 action
+    历史带偏、持续调用工具不收尾；传入 model 保证收尾与探索用同一模型。
 
     yield 事件：
       {"type":"progress","msg": str}         —— 每次工具调用前
@@ -68,6 +70,9 @@ def run(
       {"type":"error","msg": str}            —— 不可恢复错误
     """
     budget = budget or Budget()
+    # 快照分析模型：整轮 ReAct 循环固定用同一个模型，中途在 UI 切换分析模型
+    # 也不会把一次分析拆到两个模型上（保证分析稳定性）。
+    model = settings.model_for("analysis")
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": seed_user},
@@ -82,6 +87,7 @@ def run(
         try:
             step = llm_client.chat_json_messages(
                 messages, temperature=temperature, max_tokens=max_tokens, retries=1,
+                model=model,
             )
         except llm_client.LLMError as e:
             yield {"type": "error", "msg": str(e)}
@@ -133,7 +139,7 @@ def run(
     # ---- 收尾阶段：全新无工具上下文，避免被 action 历史带偏 ----
     if finalize is not None:
         try:
-            data = finalize(findings)
+            data = finalize(findings, model)
         except llm_client.LLMError as e:
             yield {"type": "error", "msg": str(e)}
             return
@@ -148,6 +154,7 @@ def run(
     try:
         step = llm_client.chat_json_messages(
             messages, temperature=temperature, max_tokens=max_tokens, retries=1,
+            model=model,
         )
     except llm_client.LLMError as e:
         yield {"type": "error", "msg": str(e)}

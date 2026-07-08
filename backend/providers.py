@@ -31,12 +31,27 @@ class LLMError(RuntimeError):
 _TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 
 
-# ---- 思考额度（“思考拉满”）----------------------------------------------
-# 各 provider 支持的“思考 / reasoning”token 上限。思考 token 会计入输出预算，
-# 故请求时会把 max_tokens 额外抬高该预算，避免思考挤占可见回答（历史 bug）。
-# DeepSeek 网关未暴露思考开关，故不在此表内。
-GEMINI_MAX_THINKING = 24576        # Gemini 3 Flash 思考上限
-ANTHROPIC_MAX_THINKING = 32000     # Claude Sonnet extended thinking 预算
+# ---- 思考额度（分档）----------------------------------------------------
+# 思考 / reasoning token 会计入输出预算，故请求时会把可见回答预算额外叠加在
+# 思考预算之上，避免思考挤占正文（历史 bug）。各 provider 支持的分档预算：
+#   off    —— 关闭思考（最快，用于健康检查等）
+#   medium —— 适中，用于项目分析（路线图/注解/agent 循环），兼顾深度与速度
+#   max    —— 拉满，用于右侧对话，追求回答深度
+# DeepSeek 网关未暴露思考开关，任何档位都无思考（忽略该参数）。
+# anthropic 的 off = 不加 thinking 块（此时可正常传 temperature）；
+# medium/max = 加 thinking 块，网关要求 temperature 必须为 1。
+_THINKING = {
+    "gemini": {"off": 0, "medium": 4096, "max": 24576},
+    "anthropic": {"off": None, "medium": 4096, "max": 32000},
+    "openai": {"off": None, "medium": None, "max": None},
+}
+_DEFAULT_TIER = "medium"
+
+
+def _thinking_budget(provider: str, tier: str):
+    """返回该 provider 在给定档位下的思考预算；None 表示不启用思考。"""
+    table = _THINKING.get(provider) or {}
+    return table.get(tier, table.get(_DEFAULT_TIER))
 
 
 # ---- 模型注册表 ----------------------------------------------------------
@@ -138,13 +153,15 @@ def _build_request(
     stream: bool,
     base_url: Optional[str],
     api_key: Optional[str],
+    thinking: str = _DEFAULT_TIER,
 ) -> Tuple[str, dict, dict]:
-    """构造 (url, headers, body)。"""
+    """构造 (url, headers, body)。thinking 为思考档位 off/medium/max。"""
     if not api_key:
         raise LLMError("LLM 未配置：请在 .env 设置 JD_LLM_API_KEY")
     root = gateway_root(base_url)
     provider = spec["provider"]
     model = spec["id"]
+    budget = _thinking_budget(provider, thinking)
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -164,16 +181,18 @@ def _build_request(
     elif provider == "anthropic":
         url = f"{root}/anthropic/v1/messages"
         sys_txt, conv = _split_system(messages)
-        # 思考拉满：思考 token 计入 max_tokens，故把上限抬到「思考预算 + 可见回答预算」。
-        budget = ANTHROPIC_MAX_THINKING
         body = {
             "model": model,
             "messages": conv,
-            "max_tokens": budget + max_tokens,   # 预留可见回答空间，避免被思考挤占
-            # extended thinking 强制 temperature=1（否则网关 400），故忽略传入温度
-            "temperature": 1,
-            "thinking": {"type": "enabled", "budget_tokens": budget},
+            "max_tokens": max_tokens,      # anthropic 必填
+            "temperature": temperature,
         }
+        if budget:
+            # 思考 token 计入 max_tokens，故把上限抬到「思考预算 + 可见回答预算」；
+            # 且 extended thinking 强制 temperature=1（否则网关 400）。
+            body["max_tokens"] = budget + max_tokens
+            body["temperature"] = 1
+            body["thinking"] = {"type": "enabled", "budget_tokens": budget}
         if sys_txt:
             body["system"] = sys_txt
         if stream:
@@ -182,16 +201,18 @@ def _build_request(
     elif provider == "gemini":
         url = f"{root}/v1/responses"
         sys_txt, contents = _to_gemini(messages)
-        # 思考拉满：思考 token 计入 maxOutputTokens，故同样抬高输出上限。
-        budget = GEMINI_MAX_THINKING
+        gen: dict = {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+        }
+        if budget is not None:
+            # 思考 token 计入 maxOutputTokens，同样抬高输出上限（budget=0 时即关闭思考）。
+            gen["maxOutputTokens"] = budget + max_tokens
+            gen["thinkingConfig"] = {"thinkingBudget": budget}
         body = {
             "model": model,
             "contents": contents,
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": budget + max_tokens,
-                "thinkingConfig": {"thinkingBudget": budget},
-            },
+            "generationConfig": gen,
         }
         if sys_txt:
             body["system_instruction"] = {"parts": [{"text": sys_txt}]}
@@ -292,12 +313,13 @@ def complete(
     *,
     temperature: float = 0.2,
     max_tokens: int = 4096,
+    thinking: str = _DEFAULT_TIER,
 ) -> str:
-    """一次非流式补全，返回纯文本。失败抛 LLMError。"""
+    """一次非流式补全，返回纯文本。thinking 为思考档位 off/medium/max。失败抛 LLMError。"""
     spec = _resolve(model_id)
     url, headers, body = _build_request(
         spec, messages, temperature=temperature, max_tokens=max_tokens,
-        stream=False, base_url=base_url, api_key=api_key,
+        stream=False, base_url=base_url, api_key=api_key, thinking=thinking,
     )
     try:
         resp = httpx.post(url, headers=headers, json=body, timeout=_TIMEOUT)
@@ -320,13 +342,14 @@ def stream(
     *,
     temperature: float = 0.3,
     max_tokens: int = 2048,
+    thinking: str = _DEFAULT_TIER,
 ) -> Iterator[str]:
-    """流式补全：逐段 yield 文本增量。失败抛 LLMError（由上层转成 [ERROR]）。"""
+    """流式补全：逐段 yield 文本增量。thinking 为思考档位 off/medium/max。失败抛 LLMError。"""
     spec = _resolve(model_id)
     provider = spec["provider"]
     url, headers, body = _build_request(
         spec, messages, temperature=temperature, max_tokens=max_tokens,
-        stream=True, base_url=base_url, api_key=api_key,
+        stream=True, base_url=base_url, api_key=api_key, thinking=thinking,
     )
     try:
         with httpx.stream("POST", url, headers=headers, json=body, timeout=_TIMEOUT) as resp:

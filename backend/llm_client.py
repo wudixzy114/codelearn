@@ -108,14 +108,20 @@ def chat_json(
     temperature: float = 0.2,
     max_tokens: int = 4096,
     retries: int = 1,
+    model: Optional[str] = None,
+    thinking: Optional[str] = None,
 ) -> Any:
-    """发起一次对话并返回解析后的 JSON 对象。失败自动重试 retries 次。"""
+    """发起一次对话并返回解析后的 JSON 对象。失败自动重试 retries 次。
+
+    model/thinking 缺省时按“分析”角色取值（稳定模型 + 适中思考）。
+    """
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
     return chat_json_messages(
-        messages, temperature=temperature, max_tokens=max_tokens, retries=retries
+        messages, temperature=temperature, max_tokens=max_tokens, retries=retries,
+        model=model, thinking=thinking,
     )
 
 
@@ -125,19 +131,26 @@ def chat_json_messages(
     temperature: float = 0.2,
     max_tokens: int = 4096,
     retries: int = 1,
+    model: Optional[str] = None,
+    thinking: Optional[str] = None,
 ) -> Any:
     """发起一次多轮对话并返回解析后的 JSON 对象。
 
     与 chat_json 共用解析/重试逻辑，但接收完整 messages 列表（agent 循环
     需要累积的对话历史，而非固定的 system+user 两条）。
+
+    model/thinking 缺省时按“分析”角色取值；agent 循环会在开始时快照一个
+    model 传进来，保证整轮分析不被中途切换模型影响。
     """
     base_url, api_key = _creds()
+    model = model or settings.model_for("analysis")
+    thinking = thinking or settings.thinking_for("analysis")
     last_err: Optional[Exception] = None
     for _ in range(retries + 1):
         try:
             content = providers.complete(
-                base_url, api_key, settings.llm_model, messages,
-                temperature=temperature, max_tokens=max_tokens,
+                base_url, api_key, model, messages,
+                temperature=temperature, max_tokens=max_tokens, thinking=thinking,
             )
             return parse_json(content)
         except LLMError as e:
@@ -147,9 +160,17 @@ def chat_json_messages(
     raise last_err if last_err else LLMError("LLM 调用失败（未知原因）")
 
 
-def chat_stream(messages, *, temperature: float = 0.3, max_tokens: int = 2048):
+def chat_stream(
+    messages,
+    *,
+    temperature: float = 0.3,
+    max_tokens: int = 2048,
+    model: Optional[str] = None,
+    thinking: Optional[str] = None,
+):
     """流式对话：逐段 yield 文本增量。messages 为 OpenAI 格式的消息列表。
 
+    model/thinking 缺省时按“对话”角色取值（可切换模型 + 思考拉满）。
     失败时 yield 一段以 [ERROR] 开头的说明文字，由上层决定如何展示。
     """
     try:
@@ -157,10 +178,12 @@ def chat_stream(messages, *, temperature: float = 0.3, max_tokens: int = 2048):
     except LLMError as e:
         yield f"[ERROR] {e}"
         return
+    model = model or settings.model_for("chat")
+    thinking = thinking or settings.thinking_for("chat")
     try:
         for piece in providers.stream(
-            base_url, api_key, settings.llm_model, messages,
-            temperature=temperature, max_tokens=max_tokens,
+            base_url, api_key, model, messages,
+            temperature=temperature, max_tokens=max_tokens, thinking=thinking,
         ):
             if piece:
                 yield piece
@@ -168,23 +191,23 @@ def chat_stream(messages, *, temperature: float = 0.3, max_tokens: int = 2048):
         yield f"[ERROR] LLM 流式调用失败：{e}"
 
 
-def ping() -> dict:
-    """健康检查：发一条极短请求，确认网关可达、密钥有效、当前模型可用。
+def ping(role: str = "chat") -> dict:
+    """健康检查：发一条极短请求，确认网关可达、密钥有效、该角色模型可用。
 
-    注意：给足 max_tokens。Gemini 3 等“会思考”的模型会先消耗思考 token，
-    预算太小会饿死可见输出，导致健康检查误判为不可用。这里只要网关正常返回
-    即视为健康（reply 可能为空）。
+    关思考（off）以求快；只要网关正常返回即视为健康（reply 可能为空）。
+    role: 'analysis' | 'chat'，决定测哪个模型。
     """
     try:
         base_url, api_key = _creds()
     except LLMError as e:
         return {"ok": False, "error": str(e)}
+    model = settings.model_for(role)
     try:
         reply = providers.complete(
-            base_url, api_key, settings.llm_model,
+            base_url, api_key, model,
             [{"role": "user", "content": "ping，请只回复 pong"}],
-            max_tokens=512, temperature=0,
+            max_tokens=64, temperature=0, thinking="off",
         )
-        return {"ok": True, "model": settings.llm_model, "reply": (reply or "").strip()}
+        return {"ok": True, "model": model, "reply": (reply or "").strip()}
     except Exception as e:
-        return {"ok": False, "model": settings.llm_model, "error": f"{e}"}
+        return {"ok": False, "model": model, "error": f"{e}"}

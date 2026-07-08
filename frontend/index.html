@@ -19,7 +19,14 @@
         <span class="preload-badge hidden" id="preloadBadge">预加载中</span>
         <button id="btnOpenWorkspace" class="btn" title="打开任意文件夹作为工作区">📂 打开工作区</button>
         <span class="health" id="healthDot" title="检查中…">●</span>
-        <select id="modelSelect" title="切换 AI 模型（切换后自动测连通性）"></select>
+        <label class="model-pick" title="项目分析用的模型（路线图/注解/探索），要求稳定">
+          <span class="model-pick-label">分析</span>
+          <select id="analysisModelSelect"></select>
+        </label>
+        <label class="model-pick" title="右侧对话用的模型，可随时切换测试">
+          <span class="model-pick-label">对话</span>
+          <select id="chatModelSelect"></select>
+        </label>
         <select id="langSelect" title="讲解语言">
           <option value="zh">中文讲解</option>
           <option value="en">English</option>

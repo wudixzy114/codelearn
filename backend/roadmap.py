@@ -102,7 +102,7 @@ def _make_finalizer(repo_map: str):
 
     这样可避免模型被 ReAct 阶段自己的 action 历史带偏而持续调用工具、不肯收尾。
     """
-    def finalize(findings: List[str]) -> Dict:
+    def finalize(findings: List[str], model: str = None) -> Dict:
         clipped = []
         total = 0
         for f in findings:
@@ -121,6 +121,7 @@ def _make_finalizer(repo_map: str):
                 findings=findings_text,
             ),
             max_tokens=6000,
+            model=model,
         )
     return finalize
 

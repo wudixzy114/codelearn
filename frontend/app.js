@@ -56,7 +56,7 @@ const state = {
 async function init() {
   bindTabs();
   bindLangSelect();
-  bindModelSelect();
+  bindModelSelects();
   $("#btnRoadmap").addEventListener("click", () => loadRoadmap(false));
   $("#btnRoadmapRegen").addEventListener("click", () => loadRoadmap(true));
   $("#btnRoadmapEdit").addEventListener("click", toggleEdit);
@@ -67,7 +67,7 @@ async function init() {
   try {
     state.config = await api("/api/config");
     $("#langSelect").value = state.config.language;
-    populateModelSelect();
+    populateModelSelects();
   } catch (e) {
     $("#repoName").textContent = "(配置读取失败)";
   }
@@ -134,38 +134,45 @@ function bindLangSelect() {
   });
 }
 
-// 用注册表填充模型下拉，选中当前模型
-function populateModelSelect() {
-  const sel = $("#modelSelect");
-  if (!sel || !state.config) return;
+// 用注册表填充两个模型下拉（分析 / 对话），分别选中各自当前模型
+function populateModelSelects() {
+  if (!state.config) return;
   const models = state.config.models || [];
-  sel.innerHTML = "";
-  models.forEach((m) => {
-    const opt = el("option", null, m.label || m.id);
-    opt.value = m.id;
-    sel.appendChild(opt);
-  });
-  if (state.config.model) sel.value = state.config.model;
+  const fill = (sel, current) => {
+    if (!sel) return;
+    sel.innerHTML = "";
+    models.forEach((m) => {
+      const opt = el("option", null, m.label || m.id);
+      opt.value = m.id;
+      sel.appendChild(opt);
+    });
+    if (current) sel.value = current;
+  };
+  fill($("#analysisModelSelect"), state.config.analysis_model);
+  fill($("#chatModelSelect"), state.config.chat_model);
 }
 
-// 切换模型：通知后端 → 更新 state → 重测连通性
-function bindModelSelect() {
-  const sel = $("#modelSelect");
-  if (!sel) return;
-  sel.addEventListener("change", async (e) => {
-    const dot = $("#healthDot");
-    dot.className = "health";
-    dot.title = "切换模型中…";
-    try {
-      state.config = await postJSON("/api/config/model", { model: e.target.value });
-      populateModelSelect();
-    } catch (err) {
-      dot.className = "health bad";
-      dot.title = "切换模型失败：" + err.message;
-      return;
-    }
-    checkHealth();
-  });
+// 切换某角色的模型：通知后端 → 更新 state → 重测该角色连通性
+function bindModelSelects() {
+  const bind = (sel, role) => {
+    if (!sel) return;
+    sel.addEventListener("change", async (e) => {
+      const dot = $("#healthDot");
+      dot.className = "health";
+      dot.title = "切换模型中…";
+      try {
+        state.config = await postJSON("/api/config/model", { model: e.target.value, role });
+        populateModelSelects();
+      } catch (err) {
+        dot.className = "health bad";
+        dot.title = "切换模型失败：" + err.message;
+        return;
+      }
+      checkHealth(role);
+    });
+  };
+  bind($("#analysisModelSelect"), "analysis");
+  bind($("#chatModelSelect"), "chat");
 }
 
 // ================= 工作区选择 =================
@@ -307,16 +314,17 @@ function resetForNewWorkspace() {
   $("#treeBody").innerHTML = '<p class="hint">加载中…</p>';
 }
 
-async function checkHealth() {
+async function checkHealth(role = "chat") {
   const dot = $("#healthDot");
   try {
-    const h = await api("/api/health");
+    const h = await api("/api/health?role=" + encodeURIComponent(role));
+    const roleName = role === "analysis" ? "分析" : "对话";
     if (h.llm && h.llm.ok) {
       dot.className = "health ok";
-      dot.title = "LLM 网关正常 · " + (h.llm.model || "");
+      dot.title = roleName + "模型正常 · " + (h.llm.model || "");
     } else {
       dot.className = "health bad";
-      dot.title = "LLM 不可用：" + ((h.llm && h.llm.error) || "未知");
+      dot.title = roleName + "模型不可用：" + ((h.llm && h.llm.error) || "未知");
     }
   } catch (e) {
     dot.className = "health bad";
@@ -1326,28 +1334,86 @@ function renderMarkdownInto(node, md) {
   });
 }
 
+// 行内 markdown：转义 + 行内代码 + 粗体（表格单元格与主流程复用）
+function inlineMd(raw) {
+  let s = esc(raw);
+  s = s.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`);
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  return s;
+}
+
+function splitTableRow(row) {
+  let s = row.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map((c) => c.trim());
+}
+
+// GFM 表格分隔行：如 |---|:--:|，至少两列
+const TABLE_SEP_RE = /^[ \t]*\|?[ \t]*:?-{1,}:?[ \t]*(\|[ \t]*:?-{1,}:?[ \t]*)+\|?[ \t]*$/;
+
+// 抽取 GFM 表格为占位块（先于全局转义/换行，避免被破坏）
+function extractTables(md, blocks) {
+  const lines = md.split("\n");
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const next = lines[i + 1];
+    if (line.includes("|") && next != null && TABLE_SEP_RE.test(next)) {
+      const header = splitTableRow(line);
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].includes("|") && lines[j].trim() !== "") {
+        rows.push(splitTableRow(lines[j]));
+        j++;
+      }
+      const th = header.map((c) => `<th>${inlineMd(c)}</th>`).join("");
+      const trs = rows
+        .map((r) => "<tr>" + r.map((c) => `<td>${inlineMd(c)}</td>`).join("") + "</tr>")
+        .join("");
+      const html = `<table class="md-table"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
+      const idx = blocks.length;
+      blocks.push(html);
+      out.push(" \x01BLOCK" + idx + "\x01 ");
+      i = j;
+    } else {
+      out.push(line);
+      i++;
+    }
+  }
+  return out.join("\n");
+}
+
 function mdToHtml(md) {
-  // 先抽取围栏代码块，避免其中内容被其他规则破坏
+  // 先抽取围栏代码块与表格为占位块，避免其中内容被其他规则破坏
   const blocks = [];
   md = md.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const i = blocks.length;
     blocks.push(`<pre><code class="language-${esc(lang || "")}">${esc(code.replace(/\n$/, ""))}</code></pre>`);
-    return ` BLOCK${i} `;
+    return " \x01BLOCK" + i + "\x01 ";
   });
+  md = extractTables(md, blocks);
+
   let html = esc(md);
   // 行内代码
   html = html.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`);
   // 粗体
   html = html.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
-  // 标题
+  // setext 标题：整行文字，下一行为 === 或 ---（须先于分隔线处理）
+  html = html.replace(/^(?![ \t]*=+[ \t]*$)(.+)\n[ \t]*=+[ \t]*$/gm, "<b>$1</b>");
+  html = html.replace(/^(?![ \t]*-+[ \t]*$)(.+)\n[ \t]*-{2,}[ \t]*$/gm, "<b>$1</b>");
+  // atx 标题
   html = html.replace(/^######\s*(.+)$/gm, "<b>$1</b>")
              .replace(/^#{1,5}\s*(.+)$/gm, "<b>$1</b>");
+  // 分隔线：整行 --- / *** / ___（吞掉行尾换行，避免多余 <br>）
+  html = html.replace(/^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*(?:\n|$)/gm, "<hr>");
   // 无序列表项
   html = html.replace(/^\s*[-*]\s+(.+)$/gm, "• $1");
   // 换行
   html = html.replace(/\n/g, "<br>");
-  // 还原代码块（先把可能被 <br> 化的占位符复原）
-  html = html.replace(/ BLOCK(\d+) /g, (_, i) => blocks[+i]);
+  // 还原占位块（占位符用 \x01 包裹，避免与正文空格/内容冲突）
+  html = html.replace(/ \x01BLOCK(\d+)\x01 /g, (_, i) => blocks[+i]);
   return html;
 }
 
