@@ -31,6 +31,14 @@ class LLMError(RuntimeError):
 _TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 
 
+# ---- 思考额度（“思考拉满”）----------------------------------------------
+# 各 provider 支持的“思考 / reasoning”token 上限。思考 token 会计入输出预算，
+# 故请求时会把 max_tokens 额外抬高该预算，避免思考挤占可见回答（历史 bug）。
+# DeepSeek 网关未暴露思考开关，故不在此表内。
+GEMINI_MAX_THINKING = 24576        # Gemini 3 Flash 思考上限
+ANTHROPIC_MAX_THINKING = 32000     # Claude Sonnet extended thinking 预算
+
+
 # ---- 模型注册表 ----------------------------------------------------------
 # 每条：id（网关模型名，也是对外唯一标识）、label（下拉展示名）、provider（方言）。
 MODELS: List[dict] = [
@@ -156,11 +164,15 @@ def _build_request(
     elif provider == "anthropic":
         url = f"{root}/anthropic/v1/messages"
         sys_txt, conv = _split_system(messages)
+        # 思考拉满：思考 token 计入 max_tokens，故把上限抬到「思考预算 + 可见回答预算」。
+        budget = ANTHROPIC_MAX_THINKING
         body = {
             "model": model,
             "messages": conv,
-            "max_tokens": max_tokens,      # anthropic 必填
-            "temperature": temperature,
+            "max_tokens": budget + max_tokens,   # 预留可见回答空间，避免被思考挤占
+            # extended thinking 强制 temperature=1（否则网关 400），故忽略传入温度
+            "temperature": 1,
+            "thinking": {"type": "enabled", "budget_tokens": budget},
         }
         if sys_txt:
             body["system"] = sys_txt
@@ -170,12 +182,15 @@ def _build_request(
     elif provider == "gemini":
         url = f"{root}/v1/responses"
         sys_txt, contents = _to_gemini(messages)
+        # 思考拉满：思考 token 计入 maxOutputTokens，故同样抬高输出上限。
+        budget = GEMINI_MAX_THINKING
         body = {
             "model": model,
             "contents": contents,
             "generationConfig": {
                 "temperature": temperature,
-                "maxOutputTokens": max_tokens,
+                "maxOutputTokens": budget + max_tokens,
+                "thinkingConfig": {"thinkingBudget": budget},
             },
         }
         if sys_txt:
@@ -239,9 +254,12 @@ def _parse_stream_line(provider: str, raw: str) -> Optional[str]:
                 return obj["choices"][0]["delta"].get("content") or None
             except (KeyError, IndexError, TypeError):
                 return None
-        # anthropic：仅取 content_block_delta 的 text
+        # anthropic：仅取正文 text_delta；思考流（thinking_delta / signature_delta）跳过
         if obj.get("type") == "content_block_delta":
-            return (obj.get("delta") or {}).get("text") or None
+            delta = obj.get("delta") or {}
+            if delta.get("type") == "text_delta":
+                return delta.get("text") or None
+            return None
         return None
 
     if provider == "gemini":
