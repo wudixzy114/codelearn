@@ -14,7 +14,7 @@
 
 **核心理念：工具与被学习的代码库解耦** —— `.env` 配置 LLM、UI 上打开任意文件夹当工作区、最近工作区跨重启自动恢复。
 
-**LLM 走京东内部网关**（`JD_LLM_*` + `XIAOSHU_MODEL`），客户端在 `providers.py` 实现了**三种方言统一封装**：OpenAI（DeepSeek）/ Gemini 3（含流式 + 思考额度分档）/ Anthropic（Claude）。三种走同一个 host 但不同路径，OpenAI 走 `/v1/chat/completions`、Gemini 走 `/v1/responses`、Anthropic 走 `/anthropic/v1/messages`。Gemini 3 Flash 在响应前会消耗"思考"token，所以 `max_tokens` 太小会饿死可见输出——这个细节已经在 `llm_client.ping` 健康检查里做了预算保护。
+**LLM 走内部多模型网关**（`JD_LLM_*` + `XIAOSHU_MODEL`），客户端在 `providers.py` 实现了**三种方言统一封装**：OpenAI（DeepSeek）/ Gemini 3（含流式 + 思考额度分档）/ Anthropic（Claude）。三种走同一个 host 但不同路径，OpenAI 走 `/v1/chat/completions`、Gemini 走 `/v1/responses`、Anthropic 走 `/anthropic/v1/messages`。Gemini 3 Flash 在响应前会消耗"思考"token，所以 `max_tokens` 太小会饿死可见输出——这个细节已经在 `llm_client.ping` 健康检查里做了预算保护。
 
 ## 仓库结构
 
